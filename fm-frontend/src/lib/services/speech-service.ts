@@ -25,6 +25,41 @@ interface SpeechStats {
     most_recent_accuracy: number;
 }
 
+interface SpeechError {
+    original_word: string;
+    spoken_word: string;
+    error_type: 'minor' | 'severe';
+    error_category?: string;
+}
+
+interface SpeechErrorsData {
+    user_id: number;
+    activity_id: number;
+    errors: SpeechError[];
+}
+
+interface PersonalizedExercise {
+    word: string;
+    category: string;
+    frequency: number;
+    practice_sentence: string;
+}
+
+interface SpeechAnalytics {
+    accuracy_trend: Array<{
+        date: string;
+        accuracy: number;
+        story_id: string;
+    }>;
+    challenging_words: Array<{
+        word: string;
+        count: number;
+    }>;
+    improvement: number;
+    total_activities: number;
+    average_accuracy: number;
+}
+
 export class SpeechService {
     private apiBaseUrl: string;
 
@@ -58,6 +93,36 @@ export class SpeechService {
             return {
                 success: false,
                 error: error instanceof Error ? error.message : 'Unknown error occurred'
+            };
+        }
+    }
+
+    /**
+     * Save speech errors from a recognition activity
+     * @param data Speech errors data
+     * @returns Promise with response data
+     */
+    async saveSpeechErrors(data: SpeechErrorsData): Promise<any> {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/errors`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || 'Failed to save speech errors');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('Error saving speech errors:', error);
+            return {
+                success: false,
+                message: error instanceof Error ? error.message : 'Unknown error occurred'
             };
         }
     }
@@ -123,6 +188,104 @@ export class SpeechService {
     }
 
     /**
+     * Get a user's common pronunciation errors
+     * @param userId User ID
+     * @param errorType Optional error type filter ('minor' or 'severe')
+     * @param limit Maximum number of results to return
+     * @returns Promise with errors data
+     */
+    async getUserErrors(userId: number, errorType?: 'minor' | 'severe', limit?: number): Promise<SpeechError[]> {
+        try {
+            const url = new URL(`${this.apiBaseUrl}/errors/user/${userId}`);
+            if (errorType) {
+                url.searchParams.append('error_type', errorType);
+            }
+            if (limit) {
+                url.searchParams.append('limit', limit.toString());
+            }
+
+            const response = await fetch(url.toString());
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || 'Failed to get user errors');
+            }
+
+            const result = await response.json();
+            return result.errors || [];
+        } catch (error) {
+            console.error('Error getting user errors:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get personalized exercises based on user's pronunciation errors
+     * @param userId User ID
+     * @returns Promise with exercises data
+     */
+    async getPersonalizedExercises(userId: number): Promise<PersonalizedExercise[]> {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/exercises/personalized/${userId}`);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || 'Failed to get personalized exercises');
+            }
+
+            const result = await response.json();
+            return result.exercises || [];
+        } catch (error) {
+            console.error('Error getting personalized exercises:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get comprehensive analytics on a user's pronunciation progress
+     * @param userId User ID
+     * @param fromDate Optional start date filter (ISO format)
+     * @param toDate Optional end date filter (ISO format)
+     * @returns Promise with analytics data
+     */
+    async getSpeechAnalytics(userId: number, fromDate?: string, toDate?: string): Promise<SpeechAnalytics> {
+        try {
+            const url = new URL(`${this.apiBaseUrl}/analytics/user/${userId}`);
+            if (fromDate) {
+                url.searchParams.append('from_date', fromDate);
+            }
+            if (toDate) {
+                url.searchParams.append('to_date', toDate);
+            }
+
+            const response = await fetch(url.toString());
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.message || 'Failed to get speech analytics');
+            }
+
+            const result = await response.json();
+            return result.analytics || {
+                accuracy_trend: [],
+                challenging_words: [],
+                improvement: 0,
+                total_activities: 0,
+                average_accuracy: 0
+            };
+        } catch (error) {
+            console.error('Error getting speech analytics:', error);
+            return {
+                accuracy_trend: [],
+                challenging_words: [],
+                improvement: 0,
+                total_activities: 0,
+                average_accuracy: 0
+            };
+        }
+    }
+
+    /**
      * Convert Blob to base64 string
      * @param blob Audio blob
      * @returns Promise with base64 string
@@ -134,5 +297,43 @@ export class SpeechService {
             reader.onerror = reject;
             reader.readAsDataURL(blob);
         });
+    }
+
+    /**
+     * Classify Arabic pronunciation errors
+     * @param original Original word
+     * @param spoken Spoken word
+     * @returns Error category
+     */
+    classifyArabicError(original: string, spoken: string): string {
+        // This implementation mirrors the backend classification logic
+
+        // Check for length differences
+        if (original.length !== spoken.length) {
+            return 'length_mismatch';
+        }
+
+        // Check for common substitution patterns
+        const commonSubstitutions: Record<string, string[]> = {
+            'ث': ['س', 'ت'],
+            'ذ': ['د', 'ز'],
+            'ظ': ['ض', 'ز'],
+            'ط': ['ت'],
+            'ض': ['د'],
+            'ص': ['س'],
+            'ق': ['ك', 'ء']
+        };
+
+        for (const [correct, substitutes] of Object.entries(commonSubstitutions)) {
+            if (original.includes(correct) && !spoken.includes(correct)) {
+                for (const sub of substitutes) {
+                    if (spoken.includes(sub)) {
+                        return `substitution_${correct}_${sub}`;
+                    }
+                }
+            }
+        }
+
+        return 'general_pronunciation';
     }
 } 

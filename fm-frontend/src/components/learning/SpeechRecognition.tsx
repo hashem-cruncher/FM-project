@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Mic, MicOff, Play, RefreshCw, CheckCircle, AlertTriangle } from "lucide-react";
 import { motion } from "framer-motion";
+import { SpeechService } from "@/lib/services/speech-service";
 
 interface SpeechRecognitionProps {
     originalText: string;
@@ -30,12 +31,14 @@ export function SpeechRecognition({
     const [accuracy, setAccuracy] = useState(0);
     const [highlightedText, setHighlightedText] = useState<React.ReactNode>(null);
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-    const [errorWords, setErrorWords] = useState<Array<{ word: string; type: 'severe' | 'minor' | 'correct' }>>([]);
+    const [errorWords, setErrorWords] = useState<Array<{ word: string; type: 'severe' | 'minor' | 'correct'; matched?: string }>>([]);
+    const [activityId, setActivityId] = useState<number | null>(null);
 
     const recognitionRef = useRef<any>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<BlobPart[]>([]);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const speechService = useRef(new SpeechService());
 
     // Initialize speech recognition
     useEffect(() => {
@@ -100,6 +103,8 @@ export function SpeechRecognition({
             setRecordingTime(0);
             audioChunksRef.current = [];
             setAudioBlob(null);
+            setActivityId(null);
+            setErrorWords([]);
 
             // Request microphone access
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -201,6 +206,84 @@ export function SpeechRecognition({
             recognizedText,
             errors
         });
+
+        // Save activity and get the activity ID
+        const userData = localStorage.getItem('user');
+        if (userData) {
+            const user = JSON.parse(userData);
+            // Determine story ID from the URL path
+            const pathSegments = window.location.pathname.split('/');
+            const storyId = pathSegments[pathSegments.length - 1] || 'default-story';
+
+            // Save activity
+            handleSaveActivity(user.id, storyId, finalAccuracy);
+        }
+    };
+
+    // Save the errors to the database after activity is saved
+    useEffect(() => {
+        const saveErrorsToDatabase = async () => {
+            if (activityId && errorWords.length > 0) {
+                try {
+                    // Extract userId from localStorage
+                    const userData = localStorage.getItem('user');
+                    if (!userData) return;
+
+                    const user = JSON.parse(userData);
+                    const userId = user.id;
+
+                    // Format errors for API - only include severe and minor errors (not correct words)
+                    const formattedErrors = errorWords
+                        .filter(error => (error.type === 'severe' || error.type === 'minor') && error.matched)
+                        .map(error => ({
+                            original_word: error.word,
+                            spoken_word: error.matched || '',
+                            error_type: error.type as 'severe' | 'minor', // Ensure type is correct
+                            error_category: speechService.current.classifyArabicError(error.word, error.matched || '')
+                        }));
+
+                    if (formattedErrors.length > 0) {
+                        await speechService.current.saveSpeechErrors({
+                            user_id: userId,
+                            activity_id: activityId,
+                            errors: formattedErrors
+                        });
+                        console.log('Speech errors saved successfully');
+                    }
+                } catch (error) {
+                    console.error('Error saving speech errors:', error);
+                }
+            }
+        };
+
+        saveErrorsToDatabase();
+    }, [activityId, errorWords]);
+
+    // Update the onComplete handler to save activity and set activityId
+    const handleSaveActivity = async (userId: number, storyId: string, accuracy: number) => {
+        try {
+            let audioData = undefined;
+            if (audioBlob) {
+                audioData = await speechService.current.blobToBase64(audioBlob);
+            }
+
+            const response = await speechService.current.saveSpeechActivity({
+                user_id: userId,
+                story_id: storyId,
+                original_text: originalText,
+                recognized_text: recognizedText,
+                accuracy: accuracy,
+                audio_data: audioData
+            });
+
+            if (response.success && response.data) {
+                setActivityId(response.data.activity_id);
+                return response.data.activity_id;
+            }
+        } catch (error) {
+            console.error('Error saving speech activity:', error);
+        }
+        return null;
     };
 
     // Arabic text normalization

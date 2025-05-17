@@ -3,6 +3,7 @@ import json
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from app.db import db
+from sqlalchemy import func
 
 
 class User(db.Model):
@@ -23,6 +24,7 @@ class User(db.Model):
     progress = db.relationship(
         "LearningProgress", back_populates="user", lazy="dynamic"
     )
+    speech_errors = db.relationship("SpeechErrorRecord", backref="user", lazy=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -42,6 +44,16 @@ class User(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_login": self.last_login.isoformat() if self.last_login else None,
         }
+
+    def get_common_pronunciation_errors(self, limit=10):
+        """Return user's most frequent pronunciation errors."""
+        return (
+            SpeechErrorRecord.query.filter_by(user_id=self.id)
+            .group_by(SpeechErrorRecord.original_word, SpeechErrorRecord.spoken_word)
+            .order_by(func.count().desc())
+            .limit(limit)
+            .all()
+        )
 
 
 class LearningLevel(db.Model):
@@ -236,10 +248,11 @@ class SpeechActivity(db.Model):
     )  # Path to the stored audio file (if saved)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relationship back to user
+    # Relationships
     user = db.relationship(
         "User", backref=db.backref("speech_activities", lazy="dynamic")
     )
+    errors = db.relationship("SpeechErrorRecord", backref="activity", lazy=True)
 
     def to_dict(self):
         return {
@@ -251,4 +264,70 @@ class SpeechActivity(db.Model):
             "accuracy": self.accuracy,
             "audio_file_path": self.audio_file_path,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class SpeechErrorRecord(db.Model):
+    __tablename__ = "speech_error_records"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    activity_id = db.Column(
+        db.Integer, db.ForeignKey("speech_activities.id"), nullable=False
+    )
+    original_word = db.Column(db.String(100), nullable=False)
+    spoken_word = db.Column(db.String(100), nullable=False)
+    error_type = db.Column(db.String(20), nullable=False)  # 'minor' or 'severe'
+    error_category = db.Column(db.String(50))  # phonetic category
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Calculate phonetic similarity
+    @property
+    def similarity_score(self):
+        """Calculate similarity between original and spoken words."""
+        # Basic implementation - improve with Arabic-specific phonetic algorithms
+        from difflib import SequenceMatcher
+
+        return SequenceMatcher(None, self.original_word, self.spoken_word).ratio() * 100
+
+    # Classify error phonetically
+    def classify_error(self):
+        """Analyze and classify the specific type of pronunciation error."""
+        # This would contain Arabic-specific phonetic analysis
+        # e.g., consonant substitution, vowel lengthening, etc.
+
+        # Check for common substitution patterns in Arabic
+        common_substitutions = {
+            "ث": ["س", "ت"],
+            "ذ": ["د", "ز"],
+            "ظ": ["ض", "ز"],
+            "ط": ["ت"],
+            "ض": ["د"],
+            "ص": ["س"],
+            "ق": ["ك", "ء"],
+        }
+
+        for correct, substitutes in common_substitutions.items():
+            if correct in self.original_word:
+                for sub in substitutes:
+                    if sub in self.spoken_word and correct not in self.spoken_word:
+                        return f"substitution_{correct}_{sub}"
+
+        # Check length differences
+        if len(self.original_word) != len(self.spoken_word):
+            return "length_mismatch"
+
+        return "general_pronunciation"
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "activity_id": self.activity_id,
+            "original_word": self.original_word,
+            "spoken_word": self.spoken_word,
+            "error_type": self.error_type,
+            "error_category": self.error_category,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "similarity_score": self.similarity_score,
         }
