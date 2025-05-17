@@ -8,6 +8,7 @@ from app.routes.auth import auth_bp
 from app.routes.learning import learning_bp
 from app.routes.progress import progress_bp
 from app.routes.speech import speech_bp
+from app.routes.stories import stories_bp
 
 # Load environment variables
 load_dotenv()
@@ -55,6 +56,7 @@ def create_app():
     app.register_blueprint(learning_bp, url_prefix="/api/learning")
     app.register_blueprint(progress_bp, url_prefix="/api/progress")
     app.register_blueprint(speech_bp, url_prefix="/api/speech")
+    app.register_blueprint(stories_bp, url_prefix="/api/stories")
 
     # Create database tables
     with app.app_context():

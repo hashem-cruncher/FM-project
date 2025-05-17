@@ -7,7 +7,7 @@ import traceback
 import logging
 
 logger = logging.getLogger(__name__)
-progress_bp = Blueprint("progress", __name__)
+progress_bp = Blueprint("progress", __name__, url_prefix="/api/progress")
 
 
 @progress_bp.route("/user/<int:user_id>", methods=["GET"])
@@ -154,138 +154,293 @@ def get_user_progress(user_id):
         return jsonify({"error": f"حدث خطأ أثناء جلب التقدم: {str(e)}"}), 500
 
 
-@progress_bp.route("/update", methods=["POST", "OPTIONS"])
+@progress_bp.route("/update", methods=["POST"])
 def update_progress():
-    """Update user progress with support for CORS preflight"""
-    if request.method == "OPTIONS":
-        # Handle CORS preflight request
-        response = current_app.make_default_options_response()
-        return response
-
+    """Update user's progress for a specific level"""
     try:
         data = request.json
         if not data:
-            return jsonify({"error": "Missing progress data"}), 400
+            return jsonify({"success": False, "message": "Missing data"}), 400
 
         user_id = data.get("user_id")
         level_id = data.get("level_id")
         progress_value = data.get("progress", 0)
         completed = data.get("completed", False)
         unlock_next_level = data.get("unlock_next_level", False)
-        learned_items = data.get("learned_items", {})
+        learned_items = data.get("learned_items")
 
         if not user_id or not level_id:
-            return jsonify({"error": "Missing required fields"}), 400
+            return (
+                jsonify({"success": False, "message": "Missing required fields"}),
+                400,
+            )
 
-        # Get user and their progress
+        # Check if user exists
         user = User.query.get(user_id)
         if not user:
-            return jsonify({"error": "User not found"}), 404
+            return jsonify({"success": False, "message": "User not found"}), 404
 
-        # Get or create level progress
-        progress = LearningProgress.query.filter_by(
-            user_id=user_id, level_id=level_id, lesson_id=None
+        # Get the level progress record
+        level_progress = LearningProgress.query.filter_by(
+            user_id=user_id,
+            level_id=level_id,
+            lesson_id=None,  # Level record has no lesson_id
         ).first()
 
-        if not progress:
-            # Create new progress record
-            progress = LearningProgress(
+        # If no record exists, create one
+        if not level_progress:
+            level_progress = LearningProgress(
                 user_id=user_id,
                 level_id=level_id,
                 lesson_id=None,
-                is_locked=False,
                 progress=0,
-                learned_items="{}",
-                is_completed=False,
-                completed_at=None,
+                is_locked=False,  # Assuming this is unlocked since we're updating it
             )
-            db.session.add(progress)
+            db.session.add(level_progress)
 
         # Update progress
-        progress.progress = progress_value
-        progress.is_completed = completed
-        progress.last_activity = datetime.utcnow()
+        level_progress.progress = progress_value
 
-        # Save learned items
-        if learned_items:
-            progress.learned_items = json.dumps(learned_items)
+        # Mark as completed if specified
+        if completed:
+            level_progress.is_completed = True
+            level_progress.completed_at = datetime.utcnow()
 
-        # Handle completion
-        if completed and not progress.completed_at:
-            progress.completed_at = datetime.utcnow()
-
-            # Update user achievements
-            completed_levels = LearningProgress.query.filter_by(
-                user_id=user_id, is_completed=True, lesson_id=None
-            ).count()
-
-            # Update user stats
-            user.completed_lessons = completed_levels
-            user.total_stars = completed_levels * 3  # 3 stars per level
-
-            # Update streak
-            last_activity = user.last_login or user.created_at
-            if last_activity:
-                time_diff = datetime.utcnow() - last_activity
-                if time_diff.days <= 1:  # Within 24 hours
-                    user.streak_days = (user.streak_days or 0) + 1
-                else:
-                    user.streak_days = 1
+        # Store learned items if provided
+        if learned_items is not None:
+            if isinstance(learned_items, dict):
+                level_progress.learned_items = json.dumps(learned_items)
             else:
-                user.streak_days = 1
+                level_progress.learned_items = learned_items
 
-            # Unlock next level if requested
-            if unlock_next_level:
-                next_level = LearningLevel.query.filter(
-                    LearningLevel.order == LearningLevel.query.get(level_id).order + 1
-                ).first()
+        # Unlock next level if specified
+        if unlock_next_level:
+            # Find the next level by order
+            current_level = LearningLevel.query.get(level_id)
+            if current_level:
+                next_level = (
+                    LearningLevel.query.filter(
+                        LearningLevel.order > current_level.order
+                    )
+                    .order_by(LearningLevel.order)
+                    .first()
+                )
 
                 if next_level:
-                    next_progress = LearningProgress.query.filter_by(
+                    # Check if a progress record exists for the next level
+                    next_level_progress = LearningProgress.query.filter_by(
                         user_id=user_id, level_id=next_level.id, lesson_id=None
                     ).first()
 
-                    if next_progress:
-                        next_progress.is_locked = False
+                    if next_level_progress:
+                        next_level_progress.is_locked = False
                     else:
-                        next_progress = LearningProgress(
+                        # Create a new progress record for the next level
+                        new_progress = LearningProgress(
                             user_id=user_id,
                             level_id=next_level.id,
                             lesson_id=None,
-                            is_locked=False,
                             progress=0,
-                            learned_items="{}",
-                            is_completed=False,
+                            is_locked=False,
                         )
-                        db.session.add(next_progress)
+                        db.session.add(new_progress)
 
-        # Save all changes
         db.session.commit()
 
-        # Return updated user data
+        # Update user's star count when completing a level
+        if completed:
+            user.total_stars += 1
+            user.completed_lessons += 1
+            db.session.commit()
+
         return jsonify(
             {
                 "success": True,
-                "data": {
-                    "user": user.to_dict(),
-                    "progress": {
-                        "level_id": level_id,
-                        "progress": progress_value,
-                        "is_completed": completed,
-                        "completed_at": (
-                            progress.completed_at.isoformat()
-                            if progress.completed_at
-                            else None
-                        ),
-                        "learned_items": learned_items,
-                    },
-                },
+                "message": "Progress updated successfully",
+                "data": {"progress": level_progress.to_dict(), "user": user.to_dict()},
             }
         )
 
     except Exception as e:
-        print(f"ERROR in update_progress: {str(e)}")
-        traceback.print_exc()
-        current_app.logger.error(f"Error updating progress: {str(e)}")
         db.session.rollback()
-        return jsonify({"error": "Failed to update progress"}), 500
+        logger.error(f"Error updating progress: {str(e)}")
+        traceback.print_exc()
+        return (
+            jsonify(
+                {"success": False, "message": f"Failed to update progress: {str(e)}"}
+            ),
+            500,
+        )
+
+
+@progress_bp.route("/level/<int:level_id>/user/<int:user_id>", methods=["GET"])
+def get_level_progress(level_id, user_id):
+    """Get user's progress for a specific level"""
+    try:
+        # Check if user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Get level progress record
+        level_progress = LearningProgress.query.filter_by(
+            user_id=user_id, level_id=level_id, lesson_id=None
+        ).first()
+
+        if not level_progress:
+            return jsonify({"error": "Progress record not found"}), 404
+
+        return jsonify(level_progress.to_dict())
+
+    except Exception as e:
+        logger.error(f"Error getting level progress: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to get level progress: {str(e)}"}), 500
+
+
+@progress_bp.route("/lesson/<int:lesson_id>/user/<int:user_id>", methods=["GET"])
+def get_lesson_progress(lesson_id, user_id):
+    """Get user's progress for a specific lesson"""
+    try:
+        # Check if user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Get lesson progress record
+        lesson_progress = LearningProgress.query.filter_by(
+            user_id=user_id, lesson_id=lesson_id
+        ).first()
+
+        if not lesson_progress:
+            return jsonify({"error": "Progress record not found"}), 404
+
+        return jsonify(lesson_progress.to_dict())
+
+    except Exception as e:
+        logger.error(f"Error getting lesson progress: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to get lesson progress: {str(e)}"}), 500
+
+
+@progress_bp.route("/lesson/update", methods=["POST"])
+def update_lesson_progress():
+    """Update user's progress for a specific lesson"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"success": False, "message": "Missing data"}), 400
+
+        user_id = data.get("user_id")
+        level_id = data.get("level_id")
+        lesson_id = data.get("lesson_id")
+        progress_value = data.get("progress", 0)
+        completed = data.get("completed", False)
+        current_step = data.get("current_step")
+        total_steps = data.get("total_steps")
+        last_position = data.get("last_position")
+
+        if not user_id or not level_id or not lesson_id:
+            return (
+                jsonify({"success": False, "message": "Missing required fields"}),
+                400,
+            )
+
+        # Check if user exists
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"success": False, "message": "User not found"}), 404
+
+        # Get the lesson progress record
+        lesson_progress = LearningProgress.query.filter_by(
+            user_id=user_id, level_id=level_id, lesson_id=lesson_id
+        ).first()
+
+        # If no record exists, create one
+        if not lesson_progress:
+            lesson_progress = LearningProgress(
+                user_id=user_id,
+                level_id=level_id,
+                lesson_id=lesson_id,
+                progress=0,
+                is_locked=False,
+            )
+            db.session.add(lesson_progress)
+
+        # Update progress fields
+        lesson_progress.progress = progress_value
+
+        if current_step is not None:
+            lesson_progress.current_step = current_step
+
+        if total_steps is not None:
+            lesson_progress.total_steps = total_steps
+
+        if last_position is not None:
+            if isinstance(last_position, dict):
+                lesson_progress.last_position = json.dumps(last_position)
+            else:
+                lesson_progress.last_position = last_position
+
+        # Mark as completed if specified
+        if completed:
+            lesson_progress.is_completed = True
+            lesson_progress.completed_at = datetime.utcnow()
+
+        db.session.commit()
+
+        # Update level progress
+        level_progress = LearningProgress.query.filter_by(
+            user_id=user_id, level_id=level_id, lesson_id=None
+        ).first()
+
+        if level_progress:
+            # Calculate percentage of completed lessons in this level
+            total_lessons = (
+                db.session.query(db.func.count())
+                .select_from(Lesson)
+                .filter_by(level_id=level_id)
+                .scalar()
+                or 1
+            )
+            completed_lessons = (
+                db.session.query(db.func.count())
+                .select_from(LearningProgress)
+                .filter_by(user_id=user_id, level_id=level_id, is_completed=True)
+                .filter(LearningProgress.lesson_id.isnot(None))
+                .scalar()
+                or 0
+            )
+
+            level_progress.progress = (completed_lessons / total_lessons) * 100
+
+            # Check if all lessons are completed
+            if completed_lessons == total_lessons:
+                level_progress.is_completed = True
+                level_progress.completed_at = datetime.utcnow()
+                user.total_stars += 1
+                user.completed_lessons += 1
+
+            db.session.commit()
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Lesson progress updated successfully",
+                "data": {"progress": lesson_progress.to_dict(), "user": user.to_dict()},
+            }
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating lesson progress: {str(e)}")
+        traceback.print_exc()
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": f"Failed to update lesson progress: {str(e)}",
+                }
+            ),
+            500,
+        )

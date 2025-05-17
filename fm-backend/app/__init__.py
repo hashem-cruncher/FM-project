@@ -9,38 +9,32 @@ from .routes.auth import auth_bp
 from .routes.learning import learning_bp
 from .routes.progress import progress_bp
 from .routes.speech import speech_bp
+from .routes.stories import stories_bp
 
 
 def create_app():
-    app = Flask(__name__)
+    app = Flask(__name__, instance_relative_config=True)
 
-    # Configure CORS
-    CORS(
-        app,
-        resources={
-            r"/api/*": {
-                "origins": ["http://localhost:3000"],
-                "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                "allow_headers": ["Content-Type", "Authorization"],
-                "supports_credentials": True,
-                "expose_headers": ["Content-Range", "X-Content-Range"],
-                "max_age": 600,
-            }
-        },
+    # Load configuration
+    app.config.from_mapping(
+        SECRET_KEY=os.environ.get("SECRET_KEY", "dev"),
+        DATABASE=os.path.join(app.instance_path, "app.sqlite"),
+        SQLALCHEMY_DATABASE_URI=f"sqlite:///{os.path.join(app.instance_path, 'app.sqlite')}",
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        UPLOAD_FOLDER=os.path.join(app.instance_path, "uploads"),
     )
 
-    # Security Configuration
-    app.config["SECRET_KEY"] = os.getenv(
-        "SECRET_KEY", "default-secret-key-change-in-production"
-    )
+    # Ensure the instance folder exists
+    try:
+        os.makedirs(app.instance_path)
+        os.makedirs(os.path.join(app.instance_path, "uploads"))
+    except OSError:
+        pass
 
-    # Database Configuration
-    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
-        "DATABASE_URL", "sqlite:///fmm.db"
-    )
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    # Initialize CORS to allow all origins
+    CORS(app, resources={r"/*": {"origins": "*"}})
 
-    # Initialize extensions
+    # Initialize database
     db.init_app(app)
 
     with app.app_context():
@@ -156,12 +150,14 @@ def create_app():
                 db.session.rollback()
                 print(f"Error creating default user: {e}")
 
-    app.register_blueprint(auth_bp, url_prefix="/api")
+    # Register blueprints with appropriate prefixes
+    app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(learning_bp, url_prefix="/api/learning")
     app.register_blueprint(progress_bp, url_prefix="/api/progress")
     app.register_blueprint(speech_bp, url_prefix="/api/speech")
+    app.register_blueprint(stories_bp, url_prefix="/api/stories")
 
-    @app.route("/health")
+    @app.route("/api/health")
     def health_check():
         return {"status": "healthy"}, 200
 

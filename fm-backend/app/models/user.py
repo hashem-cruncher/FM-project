@@ -50,7 +50,7 @@ class User(db.Model):
         return (
             SpeechErrorRecord.query.filter_by(user_id=self.id)
             .group_by(SpeechErrorRecord.original_word, SpeechErrorRecord.spoken_word)
-            .order_by(func.count().desc())
+            .order_by(func.count(SpeechErrorRecord.id).desc())
             .limit(limit)
             .all()
         )

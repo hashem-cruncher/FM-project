@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { CelebrationEffects } from "@/components/learning/CelebrationEffects";
 import { motion } from "framer-motion";
-import { BookOpen, Book, GraduationCap, ChevronRight, ChevronLeft, Home, RefreshCw, CheckCircle, Mic } from "lucide-react";
+import { BookOpen, Book, GraduationCap, ChevronRight, ChevronLeft, Home, RefreshCw, CheckCircle, Mic, Wand } from "lucide-react";
 import { Icons } from "@/components/icons";
 import { SpeechRecognition } from "@/components/learning/SpeechRecognition";
 import { SpeechAnalytics } from "@/components/learning/SpeechAnalytics";
@@ -272,6 +272,32 @@ export default function StoriesLearningPage() {
         ).length / arabicStories.length) * 100
     );
 
+    // For AI-generated stories, we need to handle display differently
+    const renderStoryContent = () => {
+        if (selectedStory.isAIGenerated && selectedStory.highlightedContent) {
+            return (
+                <div
+                    className="story-content"
+                    dangerouslySetInnerHTML={{
+                        __html: selectedStory.highlightedContent.replace(/\n/g, '<br>')
+                    }}
+                />
+            );
+        }
+
+        return (
+            <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-xl font-arabic leading-relaxed whitespace-pre-line px-4"
+                dir="rtl"
+                style={{ textAlign: 'justify' }}
+            >
+                {selectedStory.content}
+            </motion.div>
+        );
+    };
+
     return (
         <motion.div
             initial={{ opacity: 0 }}
@@ -289,6 +315,17 @@ export default function StoriesLearningPage() {
                 <p className="text-xl text-muted-foreground font-arabic leading-relaxed">
                     اقرأ واستمتع بمجموعة من القصص التعليمية الشيقة والهادفة
                 </p>
+            </div>
+
+            <div className="mb-6 flex justify-end">
+                <Button
+                    variant="default"
+                    onClick={() => router.push('/learn/stories/ai-stories')}
+                    className="font-arabic"
+                >
+                    <Wand className="h-4 w-4 ml-2" />
+                    إنشاء قصص ذكية مخصصة
+                </Button>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -354,6 +391,12 @@ export default function StoriesLearningPage() {
                                                     </span>
                                                 </div>
                                             </Badge>
+                                            {story.isAIGenerated && (
+                                                <Badge variant="outline" className="px-2 py-1 bg-purple-50 text-purple-700 border-purple-200">
+                                                    <Wand className="h-3 w-3 mr-1" />
+                                                    <span className="text-xs">ذكاء اصطناعي</span>
+                                                </Badge>
+                                            )}
                                             {progress[story.id] && (
                                                 <span className="text-sm text-muted-foreground">
                                                     {progress[story.id].score}/3
@@ -412,15 +455,26 @@ export default function StoriesLearningPage() {
                                         >
                                             {selectedStory.title}
                                         </motion.h2>
-                                        <motion.div
-                                            initial={{ opacity: 0, y: 20 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            className="text-xl font-arabic leading-relaxed whitespace-pre-line px-4"
-                                            dir="rtl"
-                                            style={{ textAlign: 'justify' }}
-                                        >
-                                            {selectedStory.content}
-                                        </motion.div>
+
+                                        {/* Display targeted words if AI-generated */}
+                                        {selectedStory.isAIGenerated && selectedStory.targetWords && (
+                                            <div className="flex flex-wrap gap-2 mb-4 justify-center">
+                                                <span className="text-sm text-muted-foreground font-arabic">الكلمات المستهدفة:</span>
+                                                {selectedStory.targetWords.map((word, i) => (
+                                                    <Badge key={i} variant="secondary" className="font-arabic text-sm">
+                                                        {word}
+                                                    </Badge>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {renderStoryContent()}
+
+                                        {selectedStory.isAIGenerated && (
+                                            <div className="text-center mt-6 text-sm text-muted-foreground font-arabic">
+                                                تم إنشاء هذه القصة باستخدام الذكاء الاصطناعي لمساعدتك على تحسين نطق الكلمات المستهدفة
+                                            </div>
+                                        )}
                                     </div>
                                 </ScrollArea>
 
@@ -653,6 +707,14 @@ export default function StoriesLearningPage() {
                 onClose={() => setShowCelebration(false)}
                 type="stories"
             />
+
+            <style jsx global>{`
+                .story-content mark {
+                    background-color: #ffeaa7;
+                    padding: 0 2px;
+                    border-radius: 3px;
+                }
+            `}</style>
         </motion.div>
     );
 } 

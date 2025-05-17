@@ -15,6 +15,9 @@ interface ArabicStory {
         meaning: string;
     }[];
     questions: StoryQuestion[];
+    isAIGenerated?: boolean;
+    highlightedContent?: string;
+    targetWords?: string[];
 }
 
 export const arabicStories: ArabicStory[] = [
@@ -181,4 +184,83 @@ export const arabicStories: ArabicStory[] = [
             }
         ]
     }
-]; 
+];
+
+// Function to add AI-generated story to the stories list
+export function addAIGeneratedStory(storyData: any): string {
+    // Create unique ID based on timestamp
+    const storyId = `ai-story-${Date.now()}`;
+
+    // Extract difficulty from metadata
+    let difficulty: 'easy' | 'medium' | 'hard';
+    switch (storyData.story.metadata.difficulty) {
+        case 'beginner':
+            difficulty = 'easy';
+            break;
+        case 'advanced':
+            difficulty = 'hard';
+            break;
+        default:
+            difficulty = 'medium';
+    }
+
+    // Create vocabulary list from target words
+    const vocabulary = storyData.target_errors.map((error: any) => ({
+        word: error.word,
+        meaning: error.category || 'كلمة مستهدفة للتدريب'
+    }));
+
+    // Create simple questions to practice comprehension
+    const questions: StoryQuestion[] = [
+        {
+            question: 'ما هو موضوع القصة؟',
+            options: [
+                storyData.story.theme,
+                'الصداقة',
+                'المغامرات',
+                'الطبيعة'
+            ],
+            correctAnswer: 0
+        },
+        {
+            question: 'ما هي الكلمات المستهدفة في هذه القصة؟',
+            options: [
+                storyData.target_errors[0]?.word || 'لا توجد كلمات',
+                storyData.target_errors[1]?.word || 'كلمات عادية',
+                'جميع الكلمات المميزة بالألوان',
+                'كلمات عشوائية'
+            ],
+            correctAnswer: 2
+        },
+        {
+            question: 'ما الهدف من هذه القصة؟',
+            options: [
+                'التسلية فقط',
+                'تعلم معلومات جديدة',
+                'التدريب على نطق الكلمات الصعبة',
+                'حفظ قصة جديدة'
+            ],
+            correctAnswer: 2
+        }
+    ];
+
+    // Create new story object with AI data
+    const newStory: ArabicStory = {
+        id: storyId,
+        title: storyData.story.theme || 'قصة منشأة بالذكاء الاصطناعي',
+        content: storyData.story.text,
+        difficulty: difficulty,
+        moral: 'تحسين مهارات النطق والقراءة',
+        vocabulary: vocabulary,
+        questions: questions,
+        isAIGenerated: true,
+        highlightedContent: storyData.story.highlighted_text,
+        targetWords: storyData.target_errors.map((e: any) => e.word)
+    };
+
+    // Add to the stories array
+    arabicStories.unshift(newStory);
+
+    // Return the ID of the newly created story
+    return storyId;
+} 
