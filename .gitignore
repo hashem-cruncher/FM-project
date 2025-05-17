@@ -1,0 +1,34 @@
+# Frontend (Next.js)
+fm-frontend/.next/
+fm-frontend/node_modules/
+fm-frontend/.env
+fm-frontend/.env.local
+fm-frontend/.env.development.local
+fm-frontend/.env.test.local
+fm-frontend/.env.production.local
+fm-frontend/npm-debug.log*
+fm-frontend/yarn-debug.log*
+fm-frontend/yarn-error.log*
+fm-frontend/build/
+fm-frontend/.vercel
+fm-frontend/.DS_Store
+
+# Backend (Flask)
+**/venv/
+fm-backend/__pycache__/
+fm-backend/*.pyc
+fm-backend/*.pyo
+fm-backend/*.pyd
+fm-backend/.env
+fm-backend/instance/
+fm-backend/.pytest_cache/
+fm-backend/.coverage
+fm-backend/htmlcov/
+fm-backend/.DS_Store
+
+# General
+.DS_Store
+.idea/
+.vscode/
+*.log
+fm-backend\venv
