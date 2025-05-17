@@ -15,15 +15,20 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { CelebrationEffects } from "@/components/learning/CelebrationEffects";
 import { motion } from "framer-motion";
-import { BookOpen, Book, GraduationCap, ChevronRight, ChevronLeft, Home, RefreshCw, CheckCircle } from "lucide-react";
+import { BookOpen, Book, GraduationCap, ChevronRight, ChevronLeft, Home, RefreshCw, CheckCircle, Mic } from "lucide-react";
 import { Icons } from "@/components/icons";
+import { SpeechRecognition } from "@/components/learning/SpeechRecognition";
+import { SpeechAnalytics } from "@/components/learning/SpeechAnalytics";
+import { SpeechService } from "@/lib/services/speech-service";
 
 interface ProgressState {
     [key: string]: {
         read: boolean;
         vocabularyLearned: boolean;
         questionsAnswered: boolean;
+        speechCompleted?: boolean;
         score: number;
+        speechAccuracy?: number;
     };
 }
 
@@ -36,7 +41,10 @@ export default function StoriesLearningPage() {
     const [showVocabulary, setShowVocabulary] = useState(false);
     const [showQuestions, setShowQuestions] = useState(false);
     const [selectedAnswers, setSelectedAnswers] = useState<{ [key: string]: number }>({});
+    const [showSpeech, setShowSpeech] = useState(false);
+    const [speechAccuracy, setSpeechAccuracy] = useState(0);
     const router = useRouter();
+    const speechService = new SpeechService();
 
     // Load progress from server
     useEffect(() => {
@@ -196,6 +204,7 @@ export default function StoriesLearningPage() {
 
         if (score >= 2) {
             toast.success('أحسنت! لقد أجبت على معظم الأسئلة بشكل صحيح 🌟');
+            setShowSpeech(true);
         } else {
             toast.info('حاول مرة أخرى للحصول على درجة أفضل');
         }
@@ -204,17 +213,63 @@ export default function StoriesLearningPage() {
         saveProgressToServer();
     };
 
+    const handleSpeechAccuracyChange = (accuracy: number) => {
+        setSpeechAccuracy(accuracy);
+    };
+
+    const handleSpeechComplete = async (results: { accuracy: number; recognizedText: string; errors: Array<{ word: string; type: 'severe' | 'minor' | 'correct' }> }) => {
+        if (userId) {
+            // Save to backend
+            try {
+                await speechService.saveSpeechActivity({
+                    user_id: userId,
+                    story_id: selectedStory.id,
+                    original_text: selectedStory.content,
+                    recognized_text: results.recognizedText,
+                    accuracy: results.accuracy
+                });
+            } catch (error) {
+                console.error('Error saving speech activity:', error);
+            }
+
+            // Update local progress
+            setProgress(prev => ({
+                ...prev,
+                [selectedStory.id]: {
+                    ...prev[selectedStory.id],
+                    speechCompleted: true,
+                    speechAccuracy: results.accuracy
+                }
+            }));
+
+            if (results.accuracy >= 70) {
+                toast.success('أحسنت! لقد تمكنت من قراءة القصة بشكل جيد 🎉');
+            } else if (results.accuracy >= 50) {
+                toast.info('جيد! استمر في التمرين لتحسين مهارات القراءة لديك.');
+            } else {
+                toast.info('استمر في التمرين، ستتحسن مع الوقت!');
+            }
+
+            // Save progress to server
+            saveProgressToServer();
+        }
+    };
+
     const isStoryCompleted = (storyId: string) => {
         const storyProgress = progress[storyId];
         return storyProgress?.read &&
             storyProgress?.vocabularyLearned &&
             storyProgress?.questionsAnswered &&
-            storyProgress?.score >= 2;
+            storyProgress?.score >= 2 &&
+            storyProgress?.speechCompleted === true &&
+            (storyProgress?.speechAccuracy ?? 0) >= 70;
     };
 
     const totalProgress = Math.round(
-        (Object.values(progress).filter(p => p.read && p.vocabularyLearned && p.questionsAnswered && p.score >= 2).length /
-            arabicStories.length) * 100
+        (Object.values(progress).filter(p =>
+            p.read && p.vocabularyLearned && p.questionsAnswered && p.score >= 2 &&
+            p.speechCompleted === true && (p.speechAccuracy ?? 0) >= 70
+        ).length / arabicStories.length) * 100
     );
 
     return (
@@ -335,6 +390,14 @@ export default function StoriesLearningPage() {
                             >
                                 <CheckCircle className="h-4 w-4 ml-2" />
                                 الأسئلة
+                            </TabsTrigger>
+                            <TabsTrigger
+                                value="speech"
+                                className="w-full font-arabic"
+                                disabled={!(progress[selectedStory.id]?.questionsAnswered && progress[selectedStory.id]?.score >= 2)}
+                            >
+                                <Mic className="h-4 w-4 ml-2" />
+                                تمرين النطق
                             </TabsTrigger>
                         </TabsList>
 
@@ -478,6 +541,33 @@ export default function StoriesLearningPage() {
                                 </div>
                             </ScrollArea>
                         </TabsContent>
+
+                        <TabsContent value="speech">
+                            <ScrollArea className="h-[500px] w-full rounded-md border p-6">
+                                <div className="space-y-6">
+                                    <h3 className="text-2xl font-bold font-arabic text-right mb-6">تمرين النطق والقراءة</h3>
+                                    <p className="text-muted-foreground font-arabic text-right mb-6">
+                                        تدرب على قراءة القصة بصوت عالٍ. سيقوم النظام بتحليل نطقك وتقديم ملاحظات.
+                                    </p>
+
+                                    <SpeechRecognition
+                                        originalText={selectedStory.content}
+                                        onAccuracyChange={handleSpeechAccuracyChange}
+                                        onComplete={handleSpeechComplete}
+                                    />
+
+                                    {userId && (
+                                        <div className="mt-10 pt-6 border-t">
+                                            <h3 className="text-2xl font-bold font-arabic text-right mb-6">تحليل أداء النطق</h3>
+                                            <SpeechAnalytics
+                                                userId={userId}
+                                                storyId={selectedStory.id}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            </ScrollArea>
+                        </TabsContent>
                     </Tabs>
                 </Card>
             </div>
@@ -494,7 +584,8 @@ export default function StoriesLearningPage() {
                         <span className="text-lg font-arabic">
                             {Math.round(
                                 (Object.values(progress).filter(p =>
-                                    p.read && p.vocabularyLearned && p.questionsAnswered && p.score >= 2
+                                    p.read && p.vocabularyLearned && p.questionsAnswered && p.score >= 2 &&
+                                    p.speechCompleted === true && (p.speechAccuracy ?? 0) >= 70
                                 ).length / arabicStories.length) * 100
                             )}%
                         </span>
@@ -502,7 +593,8 @@ export default function StoriesLearningPage() {
                     <Progress
                         value={
                             (Object.values(progress).filter(p =>
-                                p.read && p.vocabularyLearned && p.questionsAnswered && p.score >= 2
+                                p.read && p.vocabularyLearned && p.questionsAnswered && p.score >= 2 &&
+                                p.speechCompleted === true && (p.speechAccuracy ?? 0) >= 70
                             ).length / arabicStories.length) * 100
                         }
                         className="h-3"
@@ -538,7 +630,9 @@ export default function StoriesLearningPage() {
                                             read: false,
                                             vocabularyLearned: false,
                                             questionsAnswered: false,
-                                            score: 0
+                                            score: 0,
+                                            speechCompleted: false,
+                                            speechAccuracy: 0
                                         };
                                     });
                                     setProgress(reviewProgress);

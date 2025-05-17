@@ -8,6 +8,7 @@ from datetime import datetime
 from .routes.auth import auth_bp
 from .routes.learning import learning_bp
 from .routes.progress import progress_bp
+from .routes.speech import speech_bp
 
 
 def create_app():
@@ -158,6 +159,7 @@ def create_app():
     app.register_blueprint(auth_bp, url_prefix="/api")
     app.register_blueprint(learning_bp, url_prefix="/api/learning")
     app.register_blueprint(progress_bp, url_prefix="/api/progress")
+    app.register_blueprint(speech_bp, url_prefix="/api/speech")
 
     @app.route("/health")
     def health_check():

@@ -7,6 +7,7 @@ import os
 from app.routes.auth import auth_bp
 from app.routes.learning import learning_bp
 from app.routes.progress import progress_bp
+from app.routes.speech import speech_bp
 
 # Load environment variables
 load_dotenv()
@@ -38,16 +39,23 @@ def create_app():
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+    # Upload folder for speech recordings
+    app.config["UPLOAD_FOLDER"] = os.getenv("UPLOAD_FOLDER", "uploads")
+
+    # Ensure upload directories exist
+    os.makedirs(os.path.join(app.config["UPLOAD_FOLDER"], "speech"), exist_ok=True)
+
     # Initialize extensions
     from app.db import db
 
     db.init_app(app)
 
     # Register blueprints
-
     app.register_blueprint(auth_bp, url_prefix="/api")
     app.register_blueprint(learning_bp, url_prefix="/api/learning")
     app.register_blueprint(progress_bp, url_prefix="/api/progress")
+    app.register_blueprint(speech_bp, url_prefix="/api/speech")
+
     # Create database tables
     with app.app_context():
         db.create_all()

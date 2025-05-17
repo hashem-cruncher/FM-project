@@ -216,3 +216,39 @@ class LearningProgress(db.Model):
                 result["learned_items"] = {}
 
         return result
+
+
+class SpeechActivity(db.Model):
+    __tablename__ = "speech_activities"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    story_id = db.Column(
+        db.String(100), nullable=False
+    )  # ID of the story being practiced
+    original_text = db.Column(db.Text, nullable=False)  # The text being read
+    recognized_text = db.Column(
+        db.Text, nullable=True
+    )  # The text recognized by the speech API
+    accuracy = db.Column(db.Float, default=0.0)  # Recognition accuracy percentage
+    audio_file_path = db.Column(
+        db.String(255), nullable=True
+    )  # Path to the stored audio file (if saved)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationship back to user
+    user = db.relationship(
+        "User", backref=db.backref("speech_activities", lazy="dynamic")
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "story_id": self.story_id,
+            "original_text": self.original_text,
+            "recognized_text": self.recognized_text,
+            "accuracy": self.accuracy,
+            "audio_file_path": self.audio_file_path,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

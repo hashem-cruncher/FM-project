@@ -153,4 +153,108 @@ arabic-learning-app/
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-هذا المشروع مرخص تحت رخصة MIT - انظر ملف LICENSE للتفاصيل. 
+هذا المشروع مرخص تحت رخصة MIT - انظر ملف LICENSE للتفاصيل.
+
+# Arabic Speech Recognition Learning Tool
+
+## Overview
+
+This project implements a comprehensive Arabic speech recognition system integrated with an existing Arabic language learning platform. The system allows students to practice reading Arabic text aloud and receive immediate feedback on their pronunciation and reading fluency.
+
+## Features
+
+- **Speech Recording and Recognition**: Uses Web Speech API with Arabic language support
+- **Text Comparison Algorithm**: Compares spoken text with original content using specialized Arabic text normalization
+- **Pronunciation Error Detection**: Identifies and categorizes errors as severe, minor, or correct
+- **Visual Feedback**: Highlights pronunciation issues with intuitive color coding
+- **Progress Tracking**: Tracks user's reading improvement over time with detailed analytics
+- **Cross-Browser Support**: Primary support for Chrome/Edge with fallback options
+
+## Technical Implementation
+
+### Frontend Components
+
+1. **SpeechRecognition Component**:
+   - Records user's speech using browser APIs
+   - Processes and analyzes pronunciation accuracy
+   - Provides visual feedback on errors
+   - Allows playback of recorded audio
+
+2. **SpeechAnalytics Component**:
+   - Visualizes pronunciation performance metrics
+   - Shows progress over time
+   - Displays statistics like accuracy trends
+
+### Backend Components
+
+1. **SpeechActivity Model**:
+   - Stores speech activity data
+   - Records original text, recognized text, and accuracy metrics
+
+2. **Speech API Routes**:
+   - `/api/speech/save`: Saves speech recognition activity
+   - `/api/speech/history`: Gets speech recognition history
+   - `/api/speech/stats`: Gets speech recognition statistics
+
+## Arabic Language Features
+
+- Support for Modern Standard Arabic (فصحى)
+- Text normalization handling:
+  - Removal of diacritics (تشكيل/حركات)
+  - Normalization of letter variations (alif forms, etc.)
+  - Special handling for sun and moon letters
+
+## Usage
+
+1. Navigate to the Stories section
+2. Complete the reading and comprehension questions
+3. Access the Pronunciation Exercise tab
+4. Click "Start Recording" and read the text aloud
+5. Review your pronunciation analysis with highlighted errors
+6. Track your progress over time with analytics
+
+## Technologies Used
+
+- **Frontend**: React, Web Speech API, MediaRecorder API
+- **Backend**: Flask, SQLAlchemy
+- **Processing**: Custom Levenshtein distance algorithm adapted for Arabic
+
+## Future Enhancements
+
+- Offline speech recognition with TensorFlow.js
+- Support for dialect variations
+- More granular phoneme-level feedback
+- Speech pace and rhythm analysis
+
+## Setup for Development
+
+1. Clone the repository
+2. Install frontend dependencies:
+   ```
+   cd fm-frontend
+   npm install
+   ```
+3. Install backend dependencies:
+   ```
+   cd fm-backend
+   pip install -r requirements.txt
+   ```
+4. Run database migrations:
+   ```
+   cd fm-backend
+   python migrations/create_speech_activity_table.py
+   ```
+5. Start the development servers:
+   ```
+   # Terminal 1
+   cd fm-frontend
+   npm run dev
+   
+   # Terminal 2
+   cd fm-backend
+   python run.py
+   ```
+
+## Credits
+
+This feature was developed as a graduation project for Arabic language learning, utilizing open-source technologies for speech recognition and analysis. 
