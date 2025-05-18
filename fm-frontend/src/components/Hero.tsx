@@ -1,26 +1,30 @@
+"use client"
+
 import Link from 'next/link';
 
 const Hero = () => {
     return (
-        <div className="relative bg-gradient-to-b from-blue-50 to-white py-20">
-            <div className="container mx-auto px-4">
+        <div className="relative bg-gradient-to-b from-blue-100 to-white py-20">
+            <div className="container mx-auto px-4 relative z-10">
                 <div className="text-center">
-                    <h1 className="text-5xl font-bold text-gray-900 mb-6">
-                        مرحباً بك في عالم اللغة العربية! 🌟
-                    </h1>
-                    <p className="text-xl text-gray-600 mb-8">
-                        تعلم وابتكر واستمتع في رحلة تعلم اللغة العربية 🎨
-                    </p>
-                    <div className="flex justify-center gap-4">
+                    <div className="inline-block bg-white/80 backdrop-blur-sm px-8 py-4 rounded-xl shadow-lg">
+                        <h1 className="text-5xl font-bold text-gray-900 mb-6 text-shadow">
+                            مرحباً بك في عالم اللغة العربية! 🌟
+                        </h1>
+                        <p className="text-2xl font-bold text-blue-800 mb-8 border-b-2 border-blue-300 pb-2 text-shadow">
+                            تعلم وابتكر واستمتع في رحلة تعلم اللغة العربية 🎨
+                        </p>
+                    </div>
+                    <div className="flex justify-center gap-4 mt-8">
                         <Link
                             href="/login"
-                            className="bg-blue-600 text-white px-8 py-3 rounded-full hover:bg-blue-700 transition duration-300"
+                            className="bg-blue-600 text-white px-8 py-3 rounded-full hover:bg-blue-700 transition duration-300 shadow-md"
                         >
                             تسجيل الدخول
                         </Link>
                         <Link
                             href="/register"
-                            className="bg-green-600 text-white px-8 py-3 rounded-full hover:bg-green-700 transition duration-300"
+                            className="bg-green-600 text-white px-8 py-3 rounded-full hover:bg-green-700 transition duration-300 shadow-md"
                         >
                             انضم إلينا
                         </Link>
@@ -36,6 +40,11 @@ const Hero = () => {
                     ></path>
                 </svg>
             </div>
+            <style jsx global>{`
+                .text-shadow {
+                    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+                }
+            `}</style>
         </div>
     );
 };

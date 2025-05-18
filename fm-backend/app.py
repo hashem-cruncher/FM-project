@@ -146,18 +146,14 @@ def create_app():
 
         # Create default user if none exists
         from app.models.user import User
-        from werkzeug.security import generate_password_hash
 
         if not User.query.first():
             default_user = User(
                 username="demo",
                 email="demo@example.com",
-                password=generate_password_hash("demo123"),
                 nickname="متعلم جديد",
-                age=8,
-                arabic_level="beginner",
-                learning_style="visual",
             )
+            default_user.set_password("demo123")
             db.session.add(default_user)
             db.session.commit()
             print("Default user created successfully!")
