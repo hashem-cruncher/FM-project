@@ -331,3 +331,76 @@ class SpeechErrorRecord(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "similarity_score": self.similarity_score,
         }
+
+
+class AIGeneratedStory(db.Model):
+    """نموذج لتخزين القصص المولدة بواسطة الذكاء الاصطناعي"""
+
+    __tablename__ = "ai_generated_stories"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    highlighted_content = db.Column(db.Text, nullable=False)
+    theme = db.Column(db.String(100), nullable=False)
+    difficulty = db.Column(db.String(50), nullable=False)
+    age_group = db.Column(db.String(50), nullable=True)
+    target_words = db.Column(db.Text, nullable=False)  # Stored as JSON
+    vocabulary = db.Column(db.Text, nullable=False)  # Stored as JSON
+    questions = db.Column(db.Text, nullable=False)  # Stored as JSON
+    moral = db.Column(db.String(300), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationship to User
+    user = db.relationship("User", backref=db.backref("ai_stories", lazy="dynamic"))
+
+    def to_dict(self):
+        """Convert the model to a dictionary"""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "content": self.content,
+            "highlighted_content": self.highlighted_content,
+            "theme": self.theme,
+            "difficulty": self.difficulty,
+            "age_group": self.age_group,
+            "target_words": json.loads(self.target_words),
+            "vocabulary": json.loads(self.vocabulary),
+            "questions": json.loads(self.questions),
+            "moral": self.moral,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def to_story_response(self):
+        """
+        Convert the model to a format compatible with the StoryResponse
+        interface used in the frontend
+        """
+        return {
+            "success": True,
+            "user_id": self.user_id,
+            "story": {
+                "text": self.content,
+                "highlighted_text": self.highlighted_content,
+                "target_words": json.loads(self.target_words),
+                "theme": self.theme,
+                "generated_at": (
+                    self.created_at.isoformat() if self.created_at else None
+                ),
+                "metadata": {
+                    "age_group": self.age_group,
+                    "difficulty": self.difficulty,
+                    "length": "short" if len(self.content.split()) < 200 else "medium",
+                },
+            },
+            "vocabulary": json.loads(self.vocabulary),
+            "questions": json.loads(self.questions),
+            "moral": self.moral,
+            "target_errors": [
+                {"word": word, "category": "saved", "count": 1}
+                for word in json.loads(self.target_words)
+            ],
+            "id": self.id,
+        }

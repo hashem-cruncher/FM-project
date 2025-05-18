@@ -20,6 +20,7 @@ interface ArabicStory {
     targetWords?: string[];
 }
 
+// Default built-in stories
 export const arabicStories: ArabicStory[] = [
     {
         id: 'rabbit-turtle',
@@ -186,8 +187,8 @@ export const arabicStories: ArabicStory[] = [
     }
 ];
 
-// Function to add AI-generated story to the stories list
-export function addAIGeneratedStory(storyData: any): string {
+// Function to add AI-generated story to the stories list and save to database
+export async function addAIGeneratedStory(storyData: any): Promise<string> {
     // Create unique ID based on timestamp
     const storyId = `ai-story-${Date.now()}`;
 
@@ -204,45 +205,51 @@ export function addAIGeneratedStory(storyData: any): string {
             difficulty = 'medium';
     }
 
-    // Create vocabulary list from target words
-    const vocabulary = storyData.target_errors.map((error: any) => ({
-        word: error.word,
-        meaning: error.category || 'كلمة مستهدفة للتدريب'
-    }));
+    // Create vocabulary list from target words if not provided
+    let vocabulary = storyData.vocabulary || [];
+    if (!vocabulary.length && storyData.target_errors) {
+        vocabulary = storyData.target_errors.map((error: any) => ({
+            word: error.word,
+            meaning: error.category || 'كلمة مستهدفة للتدريب'
+        }));
+    }
 
-    // Create simple questions to practice comprehension
-    const questions: StoryQuestion[] = [
-        {
-            question: 'ما هو موضوع القصة؟',
-            options: [
-                storyData.story.theme,
-                'الصداقة',
-                'المغامرات',
-                'الطبيعة'
-            ],
-            correctAnswer: 0
-        },
-        {
-            question: 'ما هي الكلمات المستهدفة في هذه القصة؟',
-            options: [
-                storyData.target_errors[0]?.word || 'لا توجد كلمات',
-                storyData.target_errors[1]?.word || 'كلمات عادية',
-                'جميع الكلمات المميزة بالألوان',
-                'كلمات عشوائية'
-            ],
-            correctAnswer: 2
-        },
-        {
-            question: 'ما الهدف من هذه القصة؟',
-            options: [
-                'التسلية فقط',
-                'تعلم معلومات جديدة',
-                'التدريب على نطق الكلمات الصعبة',
-                'حفظ قصة جديدة'
-            ],
-            correctAnswer: 2
-        }
-    ];
+    // Create simple questions to practice comprehension if not provided
+    let questions = storyData.questions || [];
+    if (!questions.length) {
+        questions = [
+            {
+                question: 'ما هو موضوع القصة؟',
+                options: [
+                    storyData.story.theme,
+                    'الصداقة',
+                    'المغامرات',
+                    'الطبيعة'
+                ],
+                correctAnswer: 0
+            },
+            {
+                question: 'ما هي الكلمات المستهدفة في هذه القصة؟',
+                options: [
+                    storyData.target_errors[0]?.word || 'لا توجد كلمات',
+                    storyData.target_errors[1]?.word || 'كلمات عادية',
+                    'جميع الكلمات المميزة بالألوان',
+                    'كلمات عشوائية'
+                ],
+                correctAnswer: 2
+            },
+            {
+                question: 'ما الهدف من هذه القصة؟',
+                options: [
+                    'التسلية فقط',
+                    'تعلم معلومات جديدة',
+                    'التدريب على نطق الكلمات الصعبة',
+                    'حفظ قصة جديدة'
+                ],
+                correctAnswer: 2
+            }
+        ];
+    }
 
     // Create new story object with AI data
     const newStory: ArabicStory = {
@@ -250,17 +257,158 @@ export function addAIGeneratedStory(storyData: any): string {
         title: storyData.story.theme || 'قصة منشأة بالذكاء الاصطناعي',
         content: storyData.story.text,
         difficulty: difficulty,
-        moral: 'تحسين مهارات النطق والقراءة',
+        moral: storyData.moral || 'تحسين مهارات النطق والقراءة',
         vocabulary: vocabulary,
         questions: questions,
         isAIGenerated: true,
         highlightedContent: storyData.story.highlighted_text,
-        targetWords: storyData.target_errors.map((e: any) => e.word)
+        targetWords: storyData.story.target_words || storyData.target_errors.map((e: any) => e.word)
     };
 
-    // Add to the stories array
+    // Add to the stories array in memory
     arabicStories.unshift(newStory);
+
+    try {
+        // Save story to backend database
+        const userId = getUserIdFromLocalStorage();
+        if (userId) {
+            const response = await fetch(`http://localhost:5000/api/stories/save/${userId}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(storyData),
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                console.log(`Story saved to database with ID: ${data.story_id}`);
+                return data.story_id.toString();
+            } else {
+                console.error('Failed to save story to database:', data.message);
+            }
+        } else {
+            console.warn('User not logged in, story saved only in memory');
+        }
+    } catch (error) {
+        console.error('Error saving story to database:', error);
+    }
 
     // Return the ID of the newly created story
     return storyId;
+}
+
+// Function to get user ID from localStorage
+function getUserIdFromLocalStorage(): number | null {
+    try {
+        const userData = localStorage.getItem('user');
+        if (userData) {
+            const user = JSON.parse(userData);
+            return user.id;
+        }
+    } catch (error) {
+        console.error('Error parsing user data:', error);
+    }
+    return null;
+}
+
+// Function to load AI-generated stories from the backend
+export async function loadAIGeneratedStories(): Promise<ArabicStory[]> {
+    try {
+        const userId = getUserIdFromLocalStorage();
+        if (!userId) {
+            console.warn('User not logged in, cannot load stories');
+            return [];
+        }
+
+        const response = await fetch(`http://localhost:5000/api/stories/ai-stories/${userId}`);
+        const data = await response.json();
+
+        if (data.success && data.stories) {
+            // Convert backend stories to ArabicStory format
+            const stories: ArabicStory[] = data.stories.map((storyData: any) => {
+                // Extract difficulty from metadata
+                let difficulty: 'easy' | 'medium' | 'hard';
+                switch (storyData.story.metadata.difficulty) {
+                    case 'beginner':
+                        difficulty = 'easy';
+                        break;
+                    case 'advanced':
+                        difficulty = 'hard';
+                        break;
+                    default:
+                        difficulty = 'medium';
+                }
+
+                return {
+                    id: `ai-story-${storyData.id}`,
+                    title: storyData.story.theme || 'قصة منشأة بالذكاء الاصطناعي',
+                    content: storyData.story.text,
+                    difficulty: difficulty,
+                    moral: storyData.moral || 'تحسين مهارات النطق والقراءة',
+                    vocabulary: storyData.vocabulary || [],
+                    questions: storyData.questions || [],
+                    isAIGenerated: true,
+                    highlightedContent: storyData.story.highlighted_text,
+                    targetWords: storyData.story.target_words
+                };
+            });
+
+            // Add to the stories array (replacing any existing AI stories)
+            const nonAiStories = arabicStories.filter(story => !story.isAIGenerated);
+            arabicStories.length = 0; // Clear the array
+            arabicStories.push(...stories, ...nonAiStories);
+
+            return stories;
+        }
+        return [];
+    } catch (error) {
+        console.error('Error loading AI stories:', error);
+        return [];
+    }
+}
+
+// Function to get a single AI-generated story by ID
+export async function getAIStoryById(storyId: string): Promise<ArabicStory | null> {
+    try {
+        // Extract the numeric ID from the string (format: "ai-story-123")
+        const idMatch = storyId.match(/ai-story-(\d+)/);
+        if (!idMatch) return null;
+
+        const numericId = idMatch[1];
+        const response = await fetch(`http://localhost:5000/api/stories/ai-story/${numericId}`);
+        const storyData = await response.json();
+
+        if (storyData.success) {
+            // Extract difficulty from metadata
+            let difficulty: 'easy' | 'medium' | 'hard';
+            switch (storyData.story.metadata.difficulty) {
+                case 'beginner':
+                    difficulty = 'easy';
+                    break;
+                case 'advanced':
+                    difficulty = 'hard';
+                    break;
+                default:
+                    difficulty = 'medium';
+            }
+
+            return {
+                id: storyId,
+                title: storyData.story.theme || 'قصة منشأة بالذكاء الاصطناعي',
+                content: storyData.story.text,
+                difficulty: difficulty,
+                moral: storyData.moral || 'تحسين مهارات النطق والقراءة',
+                vocabulary: storyData.vocabulary || [],
+                questions: storyData.questions || [],
+                isAIGenerated: true,
+                highlightedContent: storyData.story.highlighted_text,
+                targetWords: storyData.story.target_words
+            };
+        }
+        return null;
+    } catch (error) {
+        console.error('Error loading AI story:', error);
+        return null;
+    }
 } 

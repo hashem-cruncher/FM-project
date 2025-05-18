@@ -135,13 +135,13 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
         }
     };
 
-    const saveStory = () => {
+    const saveStory = async () => {
         if (!story) return;
 
         try {
-            // Add the story to our stories list
-            const storyId = addAIGeneratedStory(story);
             setSaved(true);
+
+            const storyId = await addAIGeneratedStory(story);
 
             toast.success("تم حفظ القصة في مكتبة القصص", {
                 action: {
@@ -150,13 +150,13 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                 }
             });
 
-            // Automatically redirect after a short delay
             setTimeout(() => {
                 router.push('/learn/stories');
             }, 2000);
         } catch (error) {
             console.error('Error saving story:', error);
             toast.error("حدث خطأ في حفظ القصة");
+            setSaved(false);
         }
     };
 

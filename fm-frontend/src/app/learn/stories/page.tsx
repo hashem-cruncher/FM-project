@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import * as LucideIcons from "lucide-react";
 import { toast } from 'sonner';
-import { arabicStories } from '@/lib/data/stories';
+import { arabicStories, loadAIGeneratedStories } from '@/lib/data/stories';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -43,8 +43,24 @@ export default function StoriesLearningPage() {
     const [selectedAnswers, setSelectedAnswers] = useState<{ [key: string]: number }>({});
     const [showSpeech, setShowSpeech] = useState(false);
     const [speechAccuracy, setSpeechAccuracy] = useState(0);
+    const [isLoading, setIsLoading] = useState(true);
     const router = useRouter();
     const speechService = new SpeechService();
+
+    // Load AI-generated stories from database
+    useEffect(() => {
+        async function loadStories() {
+            try {
+                await loadAIGeneratedStories();
+                setIsLoading(false);
+            } catch (error) {
+                console.error('Error loading AI stories:', error);
+                setIsLoading(false);
+            }
+        }
+
+        loadStories();
+    }, []);
 
     // Load progress from server
     useEffect(() => {
@@ -317,7 +333,16 @@ export default function StoriesLearningPage() {
                 </p>
             </div>
 
-            <div className="mb-6 flex justify-end">
+            <div className="mb-6 flex justify-between items-center">
+                <Button
+                    variant="outline"
+                    onClick={() => router.push('/dashboard')}
+                    className="font-arabic"
+                >
+                    <Home className="h-4 w-4 ml-2" />
+                    العودة للوحة التحكم
+                </Button>
+
                 <Button
                     variant="default"
                     onClick={() => router.push('/learn/stories/ai-stories')}
@@ -335,79 +360,87 @@ export default function StoriesLearningPage() {
                         <BookOpen className="h-7 w-7 text-primary" />
                         <span>القصص المتوفرة</span>
                     </h2>
-                    <div className="space-y-4">
-                        {arabicStories.map((story) => (
-                            <motion.div
-                                key={story.id}
-                                whileHover={{ scale: 1.02 }}
-                                whileTap={{ scale: 0.98 }}
-                            >
-                                <Button
-                                    variant={selectedStory.id === story.id ? "default" : "outline"}
-                                    className={`w-full text-right font-arabic transition-all duration-300 p-4 h-auto ${isStoryCompleted(story.id)
-                                        ? 'border-green-500 bg-green-50 hover:bg-green-100'
-                                        : ''
-                                        }`}
-                                    onClick={() => {
-                                        setSelectedStory(story);
-                                        setShowVocabulary(false);
-                                        setShowQuestions(false);
-                                        setSelectedAnswers({});
-                                    }}
+
+                    {isLoading ? (
+                        <div className="flex justify-center items-center py-8">
+                            <RefreshCw className="h-8 w-8 animate-spin text-primary" />
+                            <p className="font-arabic mr-2">جاري تحميل القصص...</p>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {arabicStories.map((story) => (
+                                <motion.div
+                                    key={story.id}
+                                    whileHover={{ scale: 1.02 }}
+                                    whileTap={{ scale: 0.98 }}
                                 >
-                                    <div className="flex flex-col items-start w-full gap-3">
-                                        <div className="flex items-center justify-between w-full">
-                                            <span className="text-xl font-semibold">{story.title}</span>
-                                            {isStoryCompleted(story.id) && (
-                                                <motion.div
-                                                    initial={{ scale: 0 }}
-                                                    animate={{ scale: 1 }}
-                                                    className="text-green-500"
+                                    <Button
+                                        variant={selectedStory.id === story.id ? "default" : "outline"}
+                                        className={`w-full text-right font-arabic transition-all duration-300 p-4 h-auto ${isStoryCompleted(story.id)
+                                            ? 'border-green-500 bg-green-50 hover:bg-green-100'
+                                            : ''
+                                            }`}
+                                        onClick={() => {
+                                            setSelectedStory(story);
+                                            setShowVocabulary(false);
+                                            setShowQuestions(false);
+                                            setSelectedAnswers({});
+                                        }}
+                                    >
+                                        <div className="flex flex-col items-start w-full gap-3">
+                                            <div className="flex items-center justify-between w-full">
+                                                <span className="text-xl font-semibold">{story.title}</span>
+                                                {isStoryCompleted(story.id) && (
+                                                    <motion.div
+                                                        initial={{ scale: 0 }}
+                                                        animate={{ scale: 1 }}
+                                                        className="text-green-500"
+                                                    >
+                                                        <Icons.CheckCircle className="h-5 w-5" />
+                                                    </motion.div>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center justify-between w-full">
+                                                <Badge
+                                                    variant="outline"
+                                                    className={`
+                                                        px-3 py-1 text-sm
+                                                        ${story.difficulty === 'easy'
+                                                            ? 'bg-green-50 text-green-700 border-green-200'
+                                                            : story.difficulty === 'medium'
+                                                                ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
+                                                                : 'bg-red-50 text-red-700 border-red-200'}
+                                                    `}
                                                 >
-                                                    <Icons.CheckCircle className="h-5 w-5" />
-                                                </motion.div>
-                                            )}
-                                        </div>
-                                        <div className="flex items-center justify-between w-full">
-                                            <Badge
-                                                variant="outline"
-                                                className={`
-                                                    px-3 py-1 text-sm
-                                                    ${story.difficulty === 'easy'
-                                                        ? 'bg-green-50 text-green-700 border-green-200'
-                                                        : story.difficulty === 'medium'
-                                                            ? 'bg-yellow-50 text-yellow-700 border-yellow-200'
-                                                            : 'bg-red-50 text-red-700 border-red-200'}
-                                                `}
-                                            >
-                                                <div className="flex items-center gap-2">
-                                                    {story.difficulty === 'easy' && <Icons.Check className="h-4 w-4" />}
-                                                    {story.difficulty === 'medium' && <Icons.Languages className="h-4 w-4" />}
-                                                    {story.difficulty === 'hard' && <Icons.Trophy className="h-4 w-4" />}
-                                                    <span>
-                                                        {story.difficulty === 'easy' ? 'مستوى مبتدئ' :
-                                                            story.difficulty === 'medium' ? 'مستوى متوسط' :
-                                                                'مستوى متقدم'}
-                                                    </span>
-                                                </div>
-                                            </Badge>
-                                            {story.isAIGenerated && (
-                                                <Badge variant="outline" className="px-2 py-1 bg-purple-50 text-purple-700 border-purple-200">
-                                                    <Wand className="h-3 w-3 mr-1" />
-                                                    <span className="text-xs">ذكاء اصطناعي</span>
+                                                    <div className="flex items-center gap-2">
+                                                        {story.difficulty === 'easy' && <Icons.Check className="h-4 w-4" />}
+                                                        {story.difficulty === 'medium' && <Icons.Languages className="h-4 w-4" />}
+                                                        {story.difficulty === 'hard' && <Icons.Trophy className="h-4 w-4" />}
+                                                        <span>
+                                                            {story.difficulty === 'easy' ? 'مستوى مبتدئ' :
+                                                                story.difficulty === 'medium' ? 'مستوى متوسط' :
+                                                                    'مستوى متقدم'}
+                                                        </span>
+                                                    </div>
                                                 </Badge>
-                                            )}
-                                            {progress[story.id] && (
-                                                <span className="text-sm text-muted-foreground">
-                                                    {progress[story.id].score}/3
-                                                </span>
-                                            )}
+                                                {story.isAIGenerated && (
+                                                    <Badge variant="outline" className="px-2 py-1 bg-purple-50 text-purple-700 border-purple-200">
+                                                        <Wand className="h-3 w-3 mr-1" />
+                                                        <span className="text-xs">ذكاء اصطناعي</span>
+                                                    </Badge>
+                                                )}
+                                                {progress[story.id] && (
+                                                    <span className="text-sm text-muted-foreground">
+                                                        {progress[story.id].score}/3
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
-                                    </div>
-                                </Button>
-                            </motion.div>
-                        ))}
-                    </div>
+                                    </Button>
+                                </motion.div>
+                            ))}
+                        </div>
+                    )}
                 </Card>
 
                 {/* محتوى القصة */}
@@ -711,8 +744,17 @@ export default function StoriesLearningPage() {
             <style jsx global>{`
                 .story-content mark {
                     background-color: #ffeaa7;
-                    padding: 0 2px;
-                    border-radius: 3px;
+                    padding: 0 4px;
+                    border-radius: 4px;
+                    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                    font-weight: bold;
+                    color: #7b341e;
+                    transition: all 0.2s ease;
+                }
+                
+                .story-content mark:hover {
+                    background-color: #f6e05e;
+                    transform: scale(1.05);
                 }
             `}</style>
         </motion.div>
