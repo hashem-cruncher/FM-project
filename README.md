@@ -257,4 +257,69 @@ This project implements a comprehensive Arabic speech recognition system integra
 
 ## Credits
 
-This feature was developed as a graduation project for Arabic language learning, utilizing open-source technologies for speech recognition and analysis. 
+This feature was developed as a graduation project for Arabic language learning, utilizing open-source technologies for speech recognition and analysis.
+
+# مشروع تخرج FMM (تطبيق تعليم النطق)
+
+## متطلبات التشغيل
+- Docker
+- Docker Compose
+
+## خطوات التشغيل باستخدام Docker
+
+### 1. إعداد ملف البيئة
+
+قم بإنشاء ملف `.env` في المجلد الرئيسي للمشروع واضبط المتغيرات التالية:
+
+```
+OPENAI_API_KEY=your_openai_api_key
+```
+
+### 2. بناء وتشغيل الخدمات
+
+```bash
+# بناء وتشغيل الخدمات
+docker-compose up -d
+
+# عرض سجلات الخدمات
+docker-compose logs -f
+
+# عرض سجلات خدمة محددة
+docker-compose logs -f backend
+docker-compose logs -f frontend
+
+# التحقق من حالة الخدمات
+docker-compose ps
+```
+
+### 3. الوصول إلى التطبيق
+
+- واجهة المستخدم (Frontend): http://localhost:3000
+- واجهة برمجة التطبيقات (Backend): http://localhost:5000
+
+### 4. إيقاف الخدمات
+
+```bash
+docker-compose down
+```
+
+## ملاحظات هامة
+
+- بيانات قاعدة البيانات محفوظة في volume مسمى `fmm-db-data` ولن يتم فقدانها عند إعادة تشغيل الحاويات
+- يتم تنفيذ تطبيق الواجهة الأمامية في وضع التطوير مع تفعيل Hot Reload
+- يتم تنفيذ تطبيق الخلفية في وضع التطوير مع تفعيل Debug
+
+## حل المشكلات الشائعة
+
+### مشكلة الاتصال بين الخدمات
+
+تأكد من أن الـ Backend يعمل على المنفذ 5000 والـ Frontend يعمل على المنفذ 3000. إذا واجهت مشكلة في اتصال الواجهة الأمامية بواجهة API، تأكد من تعيين عنوان API الصحيح في الـ Frontend.
+
+### إعادة بناء الصور
+
+إذا قمت بتعديل Dockerfile أو متطلبات التثبيت، قم بإعادة بناء الصور:
+
+```bash
+docker-compose build --no-cache
+docker-compose up -d
+``` 

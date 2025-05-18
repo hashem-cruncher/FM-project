@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useState } from "react"
 import Link from "next/link"
-import { LogIn, User, KeyRound } from "lucide-react"
+import { LogIn, User, KeyRound, AlertCircle } from "lucide-react"
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { fetchApi } from '@/utils/api'
 
 export default function LoginPage() {
     const router = useRouter();
@@ -17,38 +18,68 @@ export default function LoginPage() {
         password: "",
     });
     const [isLoading, setIsLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
+        // Clear any previous error message
+        setErrorMessage(null);
 
         try {
-            const response = await fetch('http://localhost:5000/api/login', {
+            // Use our API utility instead of direct fetch
+            const result = await fetchApi('api/login', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify(formData),
             });
 
-            const data = await response.json();
-
-            if (response.ok) {
+            if (result.success) {
                 // Store user data in localStorage
-                localStorage.setItem('user', JSON.stringify(data.user));
+                localStorage.setItem('user', JSON.stringify(result.data.user));
 
                 // Show success message
-                toast.success(data.message || 'تم تسجيل الدخول بنجاح!');
+                toast.success(result.data.message || 'تم تسجيل الدخول بنجاح!');
 
                 // Redirect to dashboard
                 router.push('/dashboard');
                 router.refresh(); // Refresh to update navigation state
             } else {
-                toast.error(data.error || 'فشل تسجيل الدخول');
+                // Handle different types of errors
+                const statusCode = result.status || 500;
+                let errorText = '';
+
+                // Backend response may have different error formats
+                if (result.error) {
+                    // Error from fetchApi utility
+                    errorText = `خطأ: ${result.error}`;
+                } else if (result.data && result.data.error) {
+                    // Server returned a specific error message
+                    errorText = `خطأ (${statusCode}): ${result.data.error}`;
+
+                    // Special handling for common errors
+                    if (result.data.error.includes('اسم المستخدم') ||
+                        result.data.error.includes('كلمة المرور')) {
+                        errorText = `بيانات الدخول غير صحيحة: ${result.data.error}`;
+                    }
+                } else {
+                    // Handle 401 specifically for authentication failures
+                    if (statusCode === 401) {
+                        errorText = `اسم المستخدم أو كلمة المرور غير صحيحة`;
+                    } else {
+                        // Generic error based on status code
+                        errorText = `حدث خطأ أثناء تسجيل الدخول (${statusCode})`;
+                    }
+                }
+
+                // Display error in UI and toast
+                setErrorMessage(errorText);
+                toast.error(errorText);
             }
         } catch (error) {
             console.error('Login error:', error);
-            toast.error('حدث خطأ في الاتصال بالخادم');
+            const errorText = 'حدث خطأ في الاتصال بالخادم';
+            setErrorMessage(errorText);
+            toast.error(errorText);
         } finally {
             setIsLoading(false);
         }
@@ -74,6 +105,17 @@ export default function LoginPage() {
             </div>
 
             <Card className="p-8 kid-friendly-card border-2">
+                {errorMessage && (
+                    <div className="mb-6 border-2 border-red-600 bg-red-50 text-red-800 p-4 rounded-md shadow-md animate-pulse">
+                        <div className="flex gap-2 items-start">
+                            <AlertCircle className="h-6 w-6 mt-0.5 flex-shrink-0 text-red-600" />
+                            <div>
+                                <h3 className="font-bold text-lg mb-1">خطأ في تسجيل الدخول</h3>
+                                <p className="whitespace-pre-line text-lg">{errorMessage}</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 <form onSubmit={handleSubmit} className="space-y-8">
                     <div className="space-y-6">
                         <div className="space-y-4">

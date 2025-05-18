@@ -1,0 +1,41 @@
+services:
+  backend:
+    build: ./fm-backend
+    container_name: fmm-backend
+    ports:
+      - "5000:5000"
+    volumes:
+      # Mount the code for development
+      - ./fm-backend:/app
+      # Mount database file for persistence (exclude it from code reload)
+      - fmm-db-data:/app/instance
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    restart: unless-stopped
+
+  frontend:
+    build: ./fm-frontend
+    container_name: fmm-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount the code for development
+      - ./fm-frontend:/app
+      # Exclude node_modules from mount
+      - /app/node_modules
+    depends_on:
+      - backend
+    environment:
+      # In Docker container, use backend service name in the URL
+      - NEXT_PUBLIC_API_URL=http://backend:5000
+      # But in browser running on host, use localhost
+      - NEXT_PUBLIC_BROWSER_API_URL=http://localhost:5000
+    restart: unless-stopped
+    # This enables Next.js hot reload to work from inside Docker
+    command: npm run dev -- -H 0.0.0.0
+
+volumes:
+  fmm-db-data: # Named volume for persistent database storage 

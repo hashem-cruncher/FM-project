@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useState } from "react"
 import Link from "next/link"
-import { UserPlus, User, Mail, KeyRound, Sparkles, Brain, Book } from "lucide-react"
+import { UserPlus, User, Mail, KeyRound, Sparkles, Brain, Book, AlertCircle } from "lucide-react"
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { fetchApi } from '@/utils/api'
 import {
     Select,
     SelectContent,
@@ -21,6 +22,7 @@ export default function RegisterPage() {
     const router = useRouter();
     const [step, setStep] = useState(1);
     const [isLoading, setIsLoading] = useState(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [formData, setFormData] = useState({
         username: "",
         email: "",
@@ -45,6 +47,8 @@ export default function RegisterPage() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // Clear any previous error message
+        setErrorMessage(null);
 
         if (step === 1) {
             // Validate password match
@@ -72,21 +76,33 @@ export default function RegisterPage() {
             // Remove confirmPassword before sending to backend
             const { confirmPassword, ...dataToSend } = formData;
 
-            const response = await fetch('http://localhost:5000/api/register', {
+            // Use our API utility instead of direct fetch
+            const result = await fetchApi('api/register', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                },
                 body: JSON.stringify(dataToSend),
             });
 
+            // Create a similar response object for compatibility with existing code
+            const response = {
+                ok: result.success,
+                status: result.status || 500,
+                json: async () => result.data,
+            };
+
             if (!response.ok) {
                 const data = await response.json();
+                const statusCode = response.status;
 
-                // Handle validation errors
+                // Handle validation errors with more specific information
                 if (data.errors) {
-                    data.errors.forEach((error: string) => toast.error(error));
+                    // Show error type with status code
+                    const errorTitle = `خطأ في التحقق من البيانات (${statusCode})`;
+                    toast.error(errorTitle);
+
+                    // Combine all errors into one message
+                    const errorDetails = data.errors.join('\n');
+                    setErrorMessage(`${errorTitle}: ${errorDetails}`);
+
                     if (data.errors.some((error: string) =>
                         error.includes('اسم المستخدم') ||
                         error.includes('البريد الإلكتروني') ||
@@ -97,16 +113,24 @@ export default function RegisterPage() {
                     throw new Error('validation_errors');
                 }
 
-                // Handle other errors
+                // Handle other errors with more detailed information
                 if (data.error) {
-                    toast.error(data.error);
+                    // Show error type with status code
+                    const errorMessage = `خطأ في التسجيل (${statusCode}): ${data.error}`;
+                    toast.error(errorMessage);
+                    setErrorMessage(errorMessage);
+
                     if (data.error.includes('اسم المستخدم') || data.error.includes('البريد الإلكتروني')) {
                         setStep(1);
                     }
                     throw new Error(data.error);
                 }
 
-                throw new Error('حدث خطأ في التسجيل');
+                // Generic error with status code
+                const genericError = `حدث خطأ في التسجيل (${statusCode})`;
+                toast.error(genericError);
+                setErrorMessage(genericError);
+                throw new Error(genericError);
             }
 
             const data = await response.json();
@@ -160,6 +184,17 @@ export default function RegisterPage() {
             </div>
 
             <Card className="p-8 kid-friendly-card border-2">
+                {errorMessage && (
+                    <div className="mb-6 border border-red-600 bg-red-50 text-red-800 p-4 rounded-md">
+                        <div className="flex gap-2 items-start">
+                            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                            <div>
+                                <h3 className="font-bold text-lg mb-1">خطأ في التسجيل</h3>
+                                <p className="whitespace-pre-line">{errorMessage}</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 <form onSubmit={handleSubmit} className="space-y-6">
                     {step === 1 ? (
                         <>

@@ -32,3 +32,4 @@ fm-backend/.DS_Store
 .vscode/
 *.log
 fm-backend\venv
+.env
