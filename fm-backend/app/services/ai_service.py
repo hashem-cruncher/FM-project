@@ -80,7 +80,7 @@ class AIService:
         try:
             # Use the updated OpenAI client
             response = self.client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4.1-nano-2025-04-14",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

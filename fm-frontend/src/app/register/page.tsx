@@ -300,9 +300,9 @@ export default function RegisterPage() {
                                         <SelectValue placeholder="كيف تحب أن تتعلم؟" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="visual">بالصور والفيديو 🎨</SelectItem>
+                                        <SelectItem value="visual">بالصور 🎨</SelectItem>
                                         <SelectItem value="audio">بالصوت والموسيقى 🎵</SelectItem>
-                                        <SelectItem value="interactive">بالألعاب والتفاعل 🎮</SelectItem>
+                                        <SelectItem value="interactive">التفاعل 🎮</SelectItem>
                                         <SelectItem value="reading">بالقراءة والكتابة 📚</SelectItem>
                                     </SelectContent>
                                 </Select>
