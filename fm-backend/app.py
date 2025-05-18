@@ -89,6 +89,27 @@ def create_app():
                     "icon_name": "SyllablesIcon",
                     "color_class": "bg-accent/10",
                 },
+                {
+                    "title": "الكلمات البسيطة",
+                    "description": "تعلم قراءة الكلمات البسيطة",
+                    "order": 4,
+                    "icon_name": "Apple",
+                    "color_class": "bg-green-100 text-green-600",
+                },
+                {
+                    "title": "الجمل القصيرة",
+                    "description": "تعلم قراءة وفهم الجمل القصيرة",
+                    "order": 5,
+                    "icon_name": "BookOpen",
+                    "color_class": "bg-yellow-100 text-yellow-600",
+                },
+                {
+                    "title": "القصص القصيرة",
+                    "description": "قراءة وفهم القصص القصيرة",
+                    "order": 6,
+                    "icon_name": "BookText",
+                    "color_class": "bg-blue-100 text-blue-600",
+                },
             ]
 
             for level_data in levels:

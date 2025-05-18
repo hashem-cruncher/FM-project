@@ -33,6 +33,9 @@ services:
       - NEXT_PUBLIC_API_URL=http://backend:5000
       # But in browser running on host, use localhost
       - NEXT_PUBLIC_BROWSER_API_URL=http://localhost:5000
+      # Performance optimizations for Node.js
+      - NODE_ENV=development
+      - NODE_OPTIONS=--max-old-space-size=512
     restart: unless-stopped
     # This enables Next.js hot reload to work from inside Docker
     command: npm run dev -- -H 0.0.0.0
