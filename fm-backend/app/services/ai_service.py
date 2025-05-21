@@ -4,6 +4,14 @@ import json
 import random
 from datetime import datetime
 import re
+import requests
+import base64
+
+# Import these at the top level to avoid circular imports
+from app.db import db
+
+# Import the models class references but not the actual models
+import app.models.user as user_models
 
 
 class AIService:
@@ -376,6 +384,509 @@ class AIService:
                 "error": str(e),
                 "exercises": "",
                 "parsed_exercises": [],
+                "generated_at": datetime.utcnow().isoformat(),
+            }
+
+    def generate_image_for_sentence(
+        self,
+        sentence,
+        image_style="realistic",
+        size="1024x1024",
+        consistent_with_previous=False,
+        consistency_factor=0.5,
+        entity_id=None,
+        entity_type=None,
+    ):
+        """
+        إنشاء صورة توضيحية للجملة أو القصة باستخدام OpenAI
+
+        Parameters:
+        - sentence: الجملة أو القصة المراد إنشاء صورة لها
+        - image_style: نمط الصورة (realistic, cartoon, artistic)
+        - size: حجم الصورة (1024x1024, 512x512)
+        - consistent_with_previous: ما إذا كانت الصورة يجب أن تكون متسقة مع الصور السابقة
+        - consistency_factor: عامل الاتساق (0.0 - 1.0) حيث 1.0 تعني تناسق كامل
+        - entity_id: معرف الكيان المرتبط بالصورة (قصة أو جملة)
+        - entity_type: نوع الكيان ('story' أو 'sentence')
+
+        Returns:
+        - رابط الصورة المولدة أو التشفير Base64 للصورة
+        """
+        try:
+            # إضافة تعليمات الاتساق إذا كانت مطلوبة
+            consistency_instructions = ""
+            if consistent_with_previous:
+                consistency_instructions = f"""
+                IMPORTANT: This image should be CONSISTENT with previous images in the same story.
+                - Use the same character designs, art style, colors, and settings
+                - Maintain visual coherence with a consistency factor of {consistency_factor*100}%
+                - Keep the same artistic style, character appearances, and scene elements
+                - This is frame {sentence.split('الصورة رقم')[-1].split('من')[0].strip() if 'الصورة رقم' in sentence else 'N'} in a sequence
+                """
+
+            description_prompt = f"""
+            Translate the following Arabic content to English and create a detailed visual description
+            for generating an image that illustrates it (without mentioning text in the image):
+            
+            "{sentence}"
+            
+            {consistency_instructions}
+            
+            Make the description detailed, visual, and suitable for an educational context for children.
+            """
+
+            # الحصول على وصف الصورة باللغة الإنجليزية
+            description_response = self.client.chat.completions.create(
+                model="gpt-4.1-nano-2025-04-14",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that translates Arabic sentences to English and creates visual descriptions for image generation.",
+                    },
+                    {"role": "user", "content": description_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=300,
+            )
+
+            image_description = description_response.choices[0].message.content.strip()
+
+            # تخصيص الوصف حسب نمط الصورة المطلوب
+            style_descriptions = {
+                "realistic": "Create a photorealistic image that illustrates: ",
+                "cartoon": "Create a colorful cartoon-style image suitable for children that illustrates: ",
+                "artistic": "Create an artistic painting-like image that illustrates: ",
+                "digital_art": "Create a digital art illustration with vibrant colors that shows: ",
+            }
+
+            style_prompt = style_descriptions.get(
+                image_style, style_descriptions["realistic"]
+            )
+
+            # إضافة تعليمات الاتساق إلى الوصف النهائي
+            consistency_suffix = ""
+            if consistent_with_previous:
+                consistency_suffix = " Make sure this image is consistent in style, characters and setting with previous images in the same story sequence."
+
+            final_prompt = f"{style_prompt}{image_description}{consistency_suffix}"
+
+            # توليد الصورة باستخدام OpenAI - updated parameters for newer API version
+            result = self.client.images.generate(
+                model="dall-e-3",
+                prompt=final_prompt,
+                size=size,
+                n=1,
+                quality="standard",
+            )
+
+            # استخراج URL الصورة والتحويل إلى base64
+            image_url = result.data[0].url
+
+            # تنزيل الصورة من URL
+            response = requests.get(image_url)
+            if response.status_code == 200:
+                # تحويل الصورة إلى base64
+                image_b64 = base64.b64encode(response.content).decode("utf-8")
+
+                return {
+                    "success": True,
+                    "image_data": image_b64,
+                    "prompt_used": final_prompt,
+                    "generated_at": datetime.utcnow().isoformat(),
+                }
+            else:
+                raise Exception(
+                    f"Failed to download image from URL: {response.status_code}"
+                )
+
+        except Exception as e:
+            print(f"Error generating image: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "generated_at": datetime.utcnow().isoformat(),
+            }
+
+    def generate_story_images(self, story_id, image_style="cartoon"):
+        """إنشاء صور للقصة بشكل تلقائي وحفظها في قاعدة البيانات"""
+        # Use the imported references instead of direct imports
+        AIGeneratedStory = user_models.AIGeneratedStory
+        StoryImage = user_models.StoryImage
+
+        try:
+            # البحث عن القصة في قاعدة البيانات
+            story = AIGeneratedStory.query.get(story_id)
+            if not story:
+                return {"success": False, "message": "القصة غير موجودة"}
+
+            # التحقق من عدم وجود صور مسبقة
+            if story.images_generated:
+                return {
+                    "success": True,
+                    "message": "تم إنشاء الصور مسبقاً",
+                    "images": [img.to_dict() for img in story.images],
+                }
+
+            # استخراج مشاهد رئيسية من القصة
+            key_scenes = self._extract_key_scenes(story.content)
+
+            # إنشاء الصور بشكل متتابع
+            images = []
+
+            # أولاً، قم بإنشاء سياق للقصة لضمان تناسق الصور
+            story_context = f"""
+                القصة تتحدث عن: {story.content[:150]}...
+                
+                نريد صور متسلسلة مرتبطة ببعضها البعض، تستخدم نفس الشخصيات والبيئة والألوان.
+                كل صورة يجب أن تكون جزءًا من نفس العالم البصري للصور الأخرى.
+            """
+
+            # إنشاء الصور (بحد أقصى 4 صور)
+            for i, scene in enumerate(key_scenes[:4]):
+                # تحديد موقع المشهد في القصة
+                scene_position = (
+                    "بداية"
+                    if i == 0
+                    else "نهاية" if i == len(key_scenes) - 1 else f"وسط"
+                )
+
+                # إنشاء سياق غني لهذا المشهد
+                scene_context = f"""
+                    {story_context}
+                    
+                    هذه الصورة للـ{scene_position} القصة وتمثل المشهد التالي:
+                    "{scene}"
+                    
+                    الصورة رقم {i + 1} من {min(len(key_scenes), 4)} في القصة.
+                """
+
+                result = self.generate_image_for_sentence(
+                    sentence=scene_context,
+                    image_style=image_style,
+                    size="1024x1024",
+                    consistent_with_previous=i > 0,
+                    consistency_factor=0.8,
+                )
+
+                if result["success"]:
+                    # إنشاء وحفظ صورة جديدة
+                    story_image = StoryImage(
+                        story_id=story.id,
+                        image_data=result["image_data"],
+                        scene_text=scene,
+                        position=i,
+                        style=image_style,
+                    )
+                    db.session.add(story_image)
+                    images.append(story_image)
+
+            # تحديث حالة إنشاء الصور في القصة
+            story.images_generated = True
+            db.session.commit()
+
+            return {
+                "success": True,
+                "message": f"تم إنشاء {len(images)} صور للقصة",
+                "images": [img.to_dict() for img in images],
+            }
+
+        except Exception as e:
+            db.session.rollback()
+            print(f"Error generating story images: {str(e)}")
+            return {"success": False, "message": f"حدث خطأ: {str(e)}"}
+
+    def _extract_key_scenes(self, text):
+        """استخراج المشاهد الرئيسية من النص"""
+        # تقسيم النص إلى جمل
+        import re
+
+        try:
+            # تحسين نمط التعبير المنتظم للتعامل مع اللغة العربية بشكل أفضل
+            sentences = re.split(r"[.!?؟،؛\n]+", text)
+            sentences = [
+                s.strip()
+                for s in sentences
+                if len(s.strip()) > 10 and len(s.strip()) < 250
+            ]
+
+            # إذا كان لدينا أقل من 4 جمل، نعيد كل الجمل
+            if len(sentences) <= 4:
+                return sentences
+
+            # البحث عن مشاهد/أقسام محتملة في القصة
+            scenes = []
+
+            # دائمًا نشمل الجملة الأولى للمقدمة
+            scenes.append(sentences[0])
+
+            # بالنسبة للقصص متوسطة الطول، نشمل مشهدين في الوسط
+            if len(sentences) >= 6:
+                # المشهد الأوسط الأول (بالقرب من نقطة 1/3)
+                first_middle_index = len(sentences) // 3
+                scenes.append(sentences[first_middle_index])
+
+                # المشهد الأوسط الثاني (بالقرب من نقطة 2/3)
+                second_middle_index = (len(sentences) * 2) // 3
+                scenes.append(sentences[second_middle_index])
+            # بالنسبة للقصص الأقصر، نأخذ مشهدًا واحدًا في الوسط
+            elif len(sentences) > 4:
+                middle_index = len(sentences) // 2
+                scenes.append(sentences[middle_index])
+
+                # نضيف مشهدًا آخر بين الوسط والنهاية
+                third_quarter_index = (len(sentences) + middle_index) // 2
+                scenes.append(sentences[third_quarter_index])
+
+            # دائمًا نشمل الجملة الأخيرة للخاتمة
+            scenes.append(sentences[len(sentences) - 1])
+
+            return scenes
+        except Exception as e:
+            print(f"Error extracting key scenes: {str(e)}")
+            # في حالة الفشل، نعيد 4 أجزاء بسيطة من النص
+            text_length = len(text)
+            return [
+                text[: min(200, text_length // 4)].strip(),
+                text[text_length // 4 : text_length // 2].strip(),
+                text[text_length // 2 : 3 * text_length // 4].strip(),
+                text[3 * text_length // 4 :].strip(),
+            ]
+
+    def generate_section_exercises(self, section_title, sentences):
+        """
+        توليد تمارين متنوعة مخصصة لقسم محدد من أقسام تعلم الجمل
+
+        Parameters:
+        - section_title: عنوان القسم (مثلاً: "التحيات"، "الأسرة"، إلخ)
+        - sentences: قائمة بالجمل الموجودة في هذا القسم
+
+        Returns:
+        - مجموعة من التمارين المتنوعة (اختيار من متعدد وترتيب جمل)
+        """
+        system_prompt = """
+        أنت معلم للغة العربية متخصص في إنشاء تمارين تعليمية للمبتدئين.
+        ستقوم بإنشاء تمارين متنوعة بناءً على مجموعة جمل من قسم محدد لمساعدة الطلاب على تعلم اللغة العربية.
+        يجب أن تكون التمارين مناسبة للمبتدئين وتركز على الفهم والاستخدام الصحيح للجمل.
+        
+        ستقوم بإنشاء نوعين من التمارين:
+        1. تمارين اختيار من متعدد (املأ الفراغ): 3 تمارين
+        2. تمارين ترتيب الجمل: 3 تمارين
+        
+        مهم جدًا: يجب إعادة الاستجابة بتنسيق JSON دقيق حسب الهيكل التالي:
+        {
+            "exercises": {
+                "multiple_choice": [
+                    {
+                        "id": 1,
+                        "question": "أكمل الجملة: ____ عليكم",
+                        "options": ["السلام", "صباح", "مساء", "شكرًا"],
+                        "correct_answer": "السلام",
+                        "explanation": "شرح بسيط للإجابة الصحيحة"
+                    },
+                    ...
+                ],
+                "sentence_ordering": [
+                    {
+                        "id": 1,
+                        "original_sentence": "الجملة الأصلية بترتيبها الصحيح",
+                        "shuffled_words": ["كلمة3", "كلمة1", "كلمة2"],
+                        "correct_order": [1, 2, 0],
+                        "level": "سهل"
+                    },
+                    ...
+                ]
+            }
+        }
+        """
+
+        user_prompt = f"""
+        عنوان القسم: {section_title}
+        
+        الجمل التي يجب استخدامها لإنشاء التمارين:
+        {", ".join(sentences)}
+        
+        قم بإنشاء 6 تمارين متنوعة مقسمة كالتالي:
+        - 3 تمارين اختيار من متعدد (ملء الفراغات)
+        - 3 تمارين ترتيب الجمل
+        
+        التمارين يجب أن تكون:
+        1. مناسبة للقسم وموضوعه ({section_title})
+        2. متدرجة من السهل إلى الصعب
+        3. تستخدم الجمل المقدمة أو تعديلات بسيطة عليها
+        4. تعليمية وتساعد على الفهم والتذكر
+        
+        ملاحظات هامة:
+        - في تمارين الاختيار من متعدد، تأكد من أن الخيارات متقاربة ومنطقية.
+        - في تمارين ترتيب الجمل، قدم كلمات الجملة بترتيب عشوائي وقم بتوفير الترتيب الصحيح في مصفوفة الأرقام.
+        - اجعل التمارين مناسبة لمستوى المبتدئين في تعلم اللغة العربية.
+        """
+
+        try:
+            # استدعاء نموذج OpenAI
+            response = self.client.chat.completions.create(
+                model="gpt-4.1-nano-2025-04-14",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=1500,
+                response_format={"type": "json_object"},
+            )
+
+            # استخراج المحتوى من الاستجابة
+            response_content = response.choices[0].message.content
+
+            try:
+                # تحليل الاستجابة JSON
+                data = json.loads(response_content)
+
+                # التحقق من صحة البيانات المستلمة
+                if "exercises" not in data:
+                    raise ValueError("بنية البيانات المستلمة غير صحيحة")
+
+                # إعادة البيانات المنسقة
+                return {
+                    "success": True,
+                    "section_title": section_title,
+                    "exercises": data["exercises"],
+                    "generated_at": datetime.utcnow().isoformat(),
+                }
+
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON response: {str(e)}")
+                return {
+                    "success": False,
+                    "error": "فشل في تحليل استجابة النموذج اللغوي",
+                    "generated_at": datetime.utcnow().isoformat(),
+                }
+
+        except Exception as e:
+            print(f"Error generating section exercises: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "generated_at": datetime.utcnow().isoformat(),
+            }
+
+    def generate_sentence_category(
+        self, category_name=None, difficulty_level="beginner", num_sentences=3
+    ):
+        """
+        إنشاء فئة جديدة من الجمل مع جمل متناسبة مع المستوى المطلوب ومناسبة للأطفال
+
+        Parameters:
+        - category_name: اسم الفئة (اختياري، إذا كان فارغًا سيتم اقتراح فئة)
+        - difficulty_level: مستوى الصعوبة (beginner, intermediate, advanced)
+        - num_sentences: عدد الجمل المطلوبة في الفئة
+
+        Returns:
+        - فئة جديدة من الجمل مع جمل مولدة
+        """
+        system_prompt = """
+        أنت مستشار تعليمي متخصص في إنشاء محتوى تعليمي للأطفال لتعلم اللغة العربية.
+        عليك إنشاء فئة من الجمل البسيطة المناسبة للأطفال مع ترجمة وتفاصيل لكل جملة.
+        اجعل الجمل ممتعة وجذابة للأطفال، وسهلة النطق والفهم.
+        
+        مهم جدًا: يجب إعادة الاستجابة بتنسيق JSON دقيق حسب الهيكل التالي:
+        {
+            "id": "category_id", 
+            "title": "عنوان الفئة",
+            "description": "وصف قصير للفئة",
+            "icon": "ايموجي مناسب للفئة",
+            "sentences": [
+                {
+                    "sentence": "الجملة بالعربية",
+                    "translation": "الترجمة الإنجليزية",
+                    "category": "category_id",
+                    "difficulty": "easy/medium/hard",
+                    "words": ["كلمة1", "كلمة2", "..."]
+                },
+                ...
+            ]
+        }
+        """
+
+        user_prompt = f"""
+        أنشئ فئة جديدة من الجمل العربية مناسبة للأطفال لتعلم اللغة العربية.
+        
+        {"اسم الفئة المطلوبة: " + category_name if category_name else "اقترح فئة جديدة مثيرة للاهتمام ومناسبة للأطفال"}
+        مستوى الصعوبة: {difficulty_level}
+        عدد الجمل المطلوبة: {num_sentences}
+        
+        لكل جملة، قم بتوفير:
+        1. الجملة باللغة العربية (بسيطة ومناسبة للأطفال)
+        2. الترجمة الإنجليزية للجملة
+        3. تصنيف صعوبة الجملة (easy, medium, hard)
+        4. قائمة بالكلمات المكونة للجملة
+        
+        إرشادات إضافية:
+        - استخدم جملًا قصيرة وسهلة النطق
+        - تأكد من استخدام مفردات مألوفة للأطفال
+        - اجعل الجمل ممتعة وجذابة
+        - تأكد من أن الكلمات المستخدمة مناسبة للفئة العمرية
+        - استخدم ايموجي معبر ومناسب للفئة
+        """
+
+        try:
+            # استدعاء نموذج OpenAI
+            response = self.client.chat.completions.create(
+                model="gpt-4.1-nano-2025-04-14",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=1500,
+                response_format={"type": "json_object"},
+            )
+
+            # استخراج المحتوى من الاستجابة
+            response_content = response.choices[0].message.content
+
+            try:
+                # تحليل الاستجابة JSON
+                data = json.loads(response_content)
+
+                # التحقق من صحة البيانات المستلمة
+                required_fields = ["id", "title", "description", "icon", "sentences"]
+                for field in required_fields:
+                    if field not in data:
+                        raise ValueError(f"حقل {field} مفقود في البيانات المستلمة")
+
+                # التحقق من صحة كل جملة
+                for sentence in data["sentences"]:
+                    required_sentence_fields = [
+                        "sentence",
+                        "translation",
+                        "category",
+                        "difficulty",
+                        "words",
+                    ]
+                    for field in required_sentence_fields:
+                        if field not in sentence:
+                            raise ValueError(f"حقل {field} مفقود في بيانات الجملة")
+
+                # إعادة البيانات المنسقة
+                return {
+                    "success": True,
+                    "category": data,
+                    "generated_at": datetime.utcnow().isoformat(),
+                }
+
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON response: {str(e)}")
+                return {
+                    "success": False,
+                    "error": "فشل في تحليل استجابة النموذج اللغوي",
+                    "generated_at": datetime.utcnow().isoformat(),
+                }
+
+        except Exception as e:
+            print(f"Error generating sentence category: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
                 "generated_at": datetime.utcnow().isoformat(),
             }
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,10 +15,11 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { BookOpen, Wand, BookText, RefreshCw, Share, Lightbulb, ChevronLeft, ChevronRight, Printer } from "lucide-react";
+import { BookOpen, Wand, BookText, RefreshCw, Share, Lightbulb, ChevronLeft, ChevronRight, Printer, Plus, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { Badge } from "../ui/badge";
 import { addAIGeneratedStory } from "@/lib/data/stories";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface StoryGeneratorProps {
     userId: number;
@@ -73,7 +74,85 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
     const [exercisesLoading, setExercisesLoading] = useState(false);
     const [saved, setSaved] = useState(false);
 
+    // New state for managing target words
+    const [targetWords, setTargetWords] = useState<Array<{ word: string; category: string; count: number; selected: boolean }>>([]);
+    const [customWord, setCustomWord] = useState("");
+    const [loadingWords, setLoadingWords] = useState(false);
+
+    // Fetch the user's target words
+    useEffect(() => {
+        if (!userId) return;
+
+        const fetchTargetWords = async () => {
+            try {
+                setLoadingWords(true);
+                const response = await fetch(`http://localhost:5000/api/stories/target-words/${userId}`);
+                if (!response.ok) throw new Error('Failed to fetch target words');
+
+                const data = await response.json();
+                if (data.success) {
+                    setTargetWords(data.words.map((word: any) => ({
+                        ...word,
+                        selected: true // By default, all words are selected
+                    })));
+                }
+            } catch (error) {
+                console.error('Error fetching target words:', error);
+                // Use default words if we can't fetch from the backend
+                setTargetWords([
+                    { word: "مدرسة", category: "default", count: 1, selected: true },
+                    { word: "كتاب", category: "default", count: 1, selected: true },
+                    { word: "قلم", category: "default", count: 1, selected: true },
+                ]);
+            } finally {
+                setLoadingWords(false);
+            }
+        };
+
+        fetchTargetWords();
+    }, [userId]);
+
+    // Handle adding a custom word
+    const addCustomWord = () => {
+        if (!customWord.trim()) return;
+
+        // Check if word already exists
+        if (targetWords.some(item => item.word === customWord)) {
+            toast.error("هذه الكلمة موجودة بالفعل");
+            return;
+        }
+
+        setTargetWords([
+            ...targetWords,
+            { word: customWord, category: "custom", count: 1, selected: true }
+        ]);
+        setCustomWord("");
+        toast.success("تمت إضافة الكلمة");
+    };
+
+    // Handle toggling word selection
+    const toggleWordSelection = (index: number) => {
+        const updatedWords = [...targetWords];
+        updatedWords[index].selected = !updatedWords[index].selected;
+        setTargetWords(updatedWords);
+    };
+
+    // Handle removing a word
+    const removeWord = (index: number) => {
+        const updatedWords = [...targetWords];
+        updatedWords.splice(index, 1);
+        setTargetWords(updatedWords);
+        toast.success("تم حذف الكلمة");
+    };
+
     const generateStory = async () => {
+        // Check if any words are selected
+        const selectedWords = targetWords.filter(word => word.selected);
+        if (selectedWords.length === 0) {
+            toast.error("يرجى اختيار كلمة واحدة على الأقل");
+            return;
+        }
+
         try {
             setLoading(true);
             const response = await fetch(`http://localhost:5000/api/stories/generate/${userId}`, {
@@ -85,6 +164,11 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                     theme: theme || undefined,
                     length,
                     difficulty,
+                    custom_words: selectedWords.map(word => ({
+                        word: word.word,
+                        category: word.category,
+                        count: word.count
+                    }))
                 }),
             });
 
@@ -109,6 +193,13 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
 
         try {
             setExercisesLoading(true);
+            // Use the same target words that were selected for the story
+            const selectedWords = targetWords.filter(word => word.selected).map(word => ({
+                word: word.word,
+                category: word.category,
+                count: word.count
+            }));
+
             const response = await fetch(`http://localhost:5000/api/stories/exercises/${userId}`, {
                 method: 'POST',
                 headers: {
@@ -116,6 +207,7 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                 },
                 body: JSON.stringify({
                     count: 5,
+                    custom_words: selectedWords.length > 0 ? selectedWords : undefined
                 }),
             });
 
@@ -140,23 +232,39 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
 
         try {
             setSaved(true);
+            setLoading(true);
+            toast.loading("جاري حفظ القصة في قاعدة البيانات...");
 
-            const storyId = await addAIGeneratedStory(story);
+            // Add exercises data to the story object if they exist
+            const storyWithExercises = {
+                ...story,
+                exercises: exercises?.parsed_exercises || []
+            };
 
-            toast.success("تم حفظ القصة في مكتبة القصص", {
+            const storyId = await addAIGeneratedStory(storyWithExercises);
+
+            // Dismiss any existing toasts
+            toast.dismiss();
+
+            // Show success message with action button
+            toast.success("تم حفظ القصة في مكتبة القصص بنجاح", {
                 action: {
-                    label: "انتقال للقصص",
+                    label: "عرض القصص",
                     onClick: () => router.push('/learn/stories')
-                }
+                },
+                duration: 4000
             });
 
+            // Add auto-redirect with delay
             setTimeout(() => {
                 router.push('/learn/stories');
-            }, 2000);
+            }, 3000);
         } catch (error) {
             console.error('Error saving story:', error);
-            toast.error("حدث خطأ في حفظ القصة");
+            toast.error("حدث خطأ في حفظ القصة في قاعدة البيانات");
             setSaved(false);
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -241,6 +349,70 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                     <span>إنشاء قصة مخصصة للتدريب على النطق</span>
                 </h2>
 
+                <div className="mb-6">
+                    <Label className="font-arabic mb-2 block">الكلمات المستهدفة</Label>
+
+                    {loadingWords ? (
+                        <div className="flex justify-center py-4">
+                            <RefreshCw className="h-5 w-5 animate-spin text-primary" />
+                            <span className="font-arabic mr-2">جاري تحميل الكلمات...</span>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="grid gap-2 mb-4">
+                                {targetWords.map((word, index) => (
+                                    <div key={index} className="flex items-center justify-between border rounded-md p-2">
+                                        <div className="flex items-center gap-2">
+                                            <Checkbox
+                                                id={`word-${index}`}
+                                                checked={word.selected}
+                                                onCheckedChange={() => toggleWordSelection(index)}
+                                            />
+                                            <Label
+                                                htmlFor={`word-${index}`}
+                                                className={`font-arabic ${!word.selected ? 'text-muted-foreground' : ''}`}
+                                            >
+                                                {word.word}
+                                            </Label>
+                                            {word.category !== "default" && word.category !== "custom" && (
+                                                <Badge variant="outline" className="font-arabic text-xs">
+                                                    {word.count} مرات
+                                                </Badge>
+                                            )}
+                                        </div>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => removeWord(index)}
+                                            className="h-7 w-7"
+                                        >
+                                            <X className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="flex gap-2 mb-6">
+                                <Input
+                                    placeholder="أضف كلمة جديدة..."
+                                    className="font-arabic text-right"
+                                    value={customWord}
+                                    onChange={(e) => setCustomWord(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && addCustomWord()}
+                                />
+                                <Button
+                                    variant="outline"
+                                    onClick={addCustomWord}
+                                    className="font-arabic"
+                                >
+                                    <Plus className="h-4 w-4 ml-1" />
+                                    إضافة
+                                </Button>
+                            </div>
+                        </>
+                    )}
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-2 mb-6">
                     <div className="space-y-2">
                         <Label htmlFor="theme" className="font-arabic">موضوع القصة (اختياري)</Label>
@@ -291,7 +463,7 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
 
                 <Button
                     onClick={generateStory}
-                    disabled={loading}
+                    disabled={loading || targetWords.filter(w => w.selected).length === 0}
                     className="w-full font-arabic text-lg group"
                 >
                     {loading ? (
@@ -343,11 +515,21 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                                     <Button
                                         size="sm"
                                         variant={saved ? "outline" : "default"}
-                                        disabled={saved}
+                                        disabled={saved || loading}
                                         onClick={saveStory}
+                                        className="bg-green-600 hover:bg-green-700 text-white font-bold"
                                     >
-                                        <BookOpen className="h-4 w-4 ml-1" />
-                                        <span className="font-arabic">{saved ? "تم الحفظ" : "حفظ في القصص"}</span>
+                                        {loading ? (
+                                            <>
+                                                <RefreshCw className="h-4 w-4 ml-1 animate-spin" />
+                                                <span className="font-arabic">جاري الحفظ...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <BookOpen className="h-4 w-4 ml-1" />
+                                                <span className="font-arabic">{saved ? "تم الحفظ ✓" : "حفظ القصة"}</span>
+                                            </>
+                                        )}
                                     </Button>
                                 </div>
                             </div>
@@ -376,8 +558,17 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                                 </div>
                             </ScrollArea>
 
-                            <div className="text-center mt-6 font-arabic text-sm text-muted-foreground">
-                                تم إنشاء هذه القصة باستخدام الذكاء الاصطناعي بناءً على الكلمات التي تحتاج إلى تدريب
+                            <div className="text-center mt-6 space-y-3">
+                                <p className="font-arabic text-sm text-muted-foreground">
+                                    تم إنشاء هذه القصة باستخدام الذكاء الاصطناعي بناءً على الكلمات التي تم اختيارها
+                                </p>
+                                <div className="bg-green-50 border-2 border-green-300 rounded-md p-4 mt-3 shadow-sm">
+                                    <p className="font-arabic text-green-800 font-semibold flex items-center justify-center">
+                                        <BookOpen className="h-5 w-5 ml-2 text-green-600" />
+                                        لحفظ القصة والتمارين في قاعدة البيانات والوصول إليها لاحقاً،<br />
+                                        اضغط على زر "حفظ القصة" أعلى الصفحة
+                                    </p>
+                                </div>
                             </div>
                         </Card>
                     </TabsContent>
@@ -399,6 +590,14 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                                 </div>
                             ) : exercises ? (
                                 <div>
+                                    {!saved && (
+                                        <div className="mb-4 p-4 bg-blue-50 border-2 border-blue-300 rounded-md shadow-sm">
+                                            <p className="font-arabic text-blue-800 font-semibold text-center flex items-center justify-center">
+                                                <BookOpen className="h-5 w-5 ml-2 text-blue-600" />
+                                                تذكير: يجب حفظ القصة في قاعدة البيانات للاحتفاظ بالتمارين والوصول إليها لاحقاً
+                                            </p>
+                                        </div>
+                                    )}
                                     <motion.div
                                         key={exerciseTab}
                                         initial={{ opacity: 0, y: 10 }}
@@ -482,7 +681,7 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                             )}
                         </Card>
                     </TabsContent>
-                </Tabs>
+                </Tabs >
             )}
 
             <style jsx global>{`
@@ -492,6 +691,6 @@ export function AIStoryGenerator({ userId }: StoryGeneratorProps) {
                     border-radius: 3px;
                 }
             `}</style>
-        </div>
+        </div >
     );
 } 

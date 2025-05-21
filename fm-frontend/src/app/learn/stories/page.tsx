@@ -20,6 +20,7 @@ import { Icons } from "@/components/icons";
 import { SpeechRecognition } from "@/components/learning/SpeechRecognition";
 import { SpeechAnalytics } from "@/components/learning/SpeechAnalytics";
 import { SpeechService } from "@/lib/services/speech-service";
+import { StoryImageGenerator } from "@/components/learning/StoryImageGenerator";
 
 interface ProgressState {
     [key: string]: {
@@ -511,6 +512,19 @@ export default function StoriesLearningPage() {
                                     </div>
                                 </ScrollArea>
 
+                                {/* Image Generator with better UI placement */}
+                                <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.3 }}
+                                    className="mt-6 mb-4"
+                                >
+                                    <StoryImageGenerator
+                                        storyText={selectedStory.content}
+                                        className="bg-card/50 backdrop-blur-sm border border-primary/10 shadow-sm"
+                                    />
+                                </motion.div>
+
                                 {!progress[selectedStory.id]?.read && (
                                     <motion.div
                                         initial={{ opacity: 0, y: 20 }}
@@ -751,7 +765,7 @@ export default function StoriesLearningPage() {
                     color: #7b341e;
                     transition: all 0.2s ease;
                 }
-                
+                    
                 .story-content mark:hover {
                     background-color: #f6e05e;
                     transform: scale(1.05);

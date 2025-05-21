@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from 'next/navigation';
 import { Card } from "@/components/ui/card";
@@ -11,24 +11,45 @@ import { arabicSentences } from '@/lib/data/sentences';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SpeechReader } from "@/components/learning/SpeechReader";
 import { CelebrationEffects } from "@/components/learning/CelebrationEffects";
+import { ImageGenerator } from "@/components/learning/ImageGenerator";
+import { SectionExercises } from "@/components/learning/SectionExercises";
+import { SpeechRecognition } from "@/components/learning/SpeechRecognition";
+import { SpeechAnalytics } from "@/components/learning/SpeechAnalytics";
+import { SpeechService } from "@/lib/services/speech-service";
 import * as Icons from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 interface ProgressState {
-    [key: string]: number;
-}
-
-interface PracticeQuestion {
-    type: 'multiple_choice' | 'arrange' | 'complete';
-    sentence: string;
-    question: string;
-    options?: string[];
-    correctAnswer: string | string[];
-    translation?: string;
+    [key: string]: number | {
+        read?: boolean;
+        vocabularyLearned?: boolean;
+        questionsAnswered?: boolean;
+        speechCompleted?: boolean;
+        score?: number;
+        speechAccuracy?: number;
+    } | {
+        completed: boolean;
+        accuracy: number;
+    };
 }
 
 export default function SentencesLearningPage() {
@@ -40,15 +61,29 @@ export default function SentencesLearningPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [showTranslation, setShowTranslation] = useState(false);
     const [showWords, setShowWords] = useState(false);
-    const [practiceMode, setPracticeMode] = useState<'learn' | 'practice'>('learn');
     const [selectedWord, setSelectedWord] = useState<string | null>(null);
-    const [practiceQuestions, setPracticeQuestions] = useState<PracticeQuestion[]>([]);
-    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-    const [userAnswer, setUserAnswer] = useState<string | string[]>('');
-    const [showResult, setShowResult] = useState(false);
-    const [isCorrect, setIsCorrect] = useState(false);
-    const [practiceScore, setPracticeScore] = useState(0);
+    const [showSectionExercises, setShowSectionExercises] = useState(false);
+    const [allCategories, setAllCategories] = useState(arabicSentences);
+    const [isLoadingCategories, setIsLoadingCategories] = useState(false);
+    const [activeTab, setActiveTab] = useState("");
+    const [viewMode, setViewMode] = useState<'scroll' | 'grid'>('scroll');
+    const [canScrollLeft, setCanScrollLeft] = useState(false);
+    const [canScrollRight, setCanScrollRight] = useState(false);
+
+    // إضافة حالات للحوار وعملية توليد الفئات
+    const [isGenerateDialogOpen, setIsGenerateDialogOpen] = useState(false);
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [categoryName, setCategoryName] = useState("");
+    const [difficultyLevel, setDifficultyLevel] = useState("beginner");
+    const [numSentences, setNumSentences] = useState(5);
+
+    const [showSpeechPractice, setShowSpeechPractice] = useState(false);
+    const [speechAccuracy, setSpeechAccuracy] = useState(0);
+    const speechService = new SpeechService();
+
     const router = useRouter();
+    const tabsContainerRef = useRef<HTMLDivElement>(null);
+    const scrollableRef = useRef<HTMLDivElement>(null);
 
     // Load progress from server
     useEffect(() => {
@@ -80,6 +115,9 @@ export default function SentencesLearningPage() {
                         }
                     }
                 }
+
+                // تحميل الفئات المخصصة من الخادم
+                await loadCustomCategories(user.id);
             } catch (error) {
                 console.error('Error loading progress:', error);
                 toast.error('حدث خطأ في تحميل التقدم');
@@ -89,13 +127,89 @@ export default function SentencesLearningPage() {
         loadProgress();
     }, []);
 
+    // تحميل الفئات المخصصة من الخادم
+    const loadCustomCategories = async (userId: number) => {
+        try {
+            setIsLoadingCategories(true);
+            const response = await fetch(`http://localhost:5000/api/learning/custom-sentence-categories/${userId}`);
+            if (response.ok) {
+                const result = await response.json();
+
+                if (result.success && Array.isArray(result.categories) && result.categories.length > 0) {
+                    // دمج الفئات المخصصة مع الفئات الافتراضية
+                    const baseCategories = arabicSentences;
+
+                    // دمج الفئات وتجنب التكرار
+                    const merged = [...baseCategories];
+
+                    result.categories.forEach((customCat: any) => {
+                        // تنسيق البيانات للتوافق مع بنية الفئات
+                        const formattedCategory = {
+                            id: customCat.id,
+                            title: customCat.title,
+                            description: customCat.description,
+                            icon: customCat.icon,
+                            sentences: customCat.sentences
+                        };
+
+                        // البحث عن الفئة إذا كانت موجودة من قبل
+                        const existingIndex = merged.findIndex(cat => cat.id === customCat.id);
+
+                        if (existingIndex >= 0) {
+                            // تحديث الفئة الموجودة
+                            merged[existingIndex] = formattedCategory;
+                        } else {
+                            // إضافة فئة جديدة
+                            merged.push(formattedCategory);
+                        }
+                    });
+
+                    setAllCategories(merged);
+
+                    // تعيين علامة التبويب النشطة (إذا لم تكن محددة بالفعل)
+                    if (!activeTab && merged.length > 0) {
+                        setActiveTab(merged[0].id);
+                        setSelectedCategory(merged[0]);
+                        setSelectedSentence(merged[0].sentences[0]);
+                    }
+                }
+            } else {
+                console.error('Error loading custom categories');
+            }
+            setIsLoadingCategories(false);
+        } catch (error) {
+            console.error('Error loading custom categories:', error);
+            setIsLoadingCategories(false);
+        }
+    };
+
     const saveProgressToServer = async () => {
         if (!userId) return;
 
         try {
             setIsSaving(true);
-            const totalSentences = arabicSentences.reduce((sum, category) => sum + category.sentences.length, 0);
-            const learnedSentences = Object.keys(progress).filter(key => progress[key] === 100).length;
+            // Get previous progress data format
+            const sentenceProgressData = { ...progress };
+
+            // Convert to new format if needed for compatibility
+            const progressData = Object.keys(sentenceProgressData).reduce((acc, key) => {
+                if (typeof sentenceProgressData[key] === 'number') {
+                    acc[key] = {
+                        read: sentenceProgressData[key] === 100,
+                        speechCompleted: !!sentenceProgressData[`${key}_speech`]
+                    };
+                } else {
+                    acc[key] = sentenceProgressData[key];
+                }
+                return acc;
+            }, {} as Record<string, any>);
+
+            const totalSentences = allCategories.reduce((sum, category) => sum + category.sentences.length, 0);
+            const learnedSentences = Object.keys(progressData).filter(key => {
+                const progress = progressData[key];
+                return (typeof progress === 'number' && progress === 100) ||
+                    (typeof progress === 'object' && progress.read === true);
+            }).length;
             const progressPercentage = Math.round((learnedSentences / totalSentences) * 100);
 
             const response = await fetch('http://localhost:5000/api/progress/update', {
@@ -109,7 +223,7 @@ export default function SentencesLearningPage() {
                     progress: progressPercentage,
                     completed: progressPercentage === 100,
                     unlock_next_level: progressPercentage === 100,
-                    learned_items: progress
+                    learned_items: progressData
                 }),
             });
 
@@ -137,7 +251,7 @@ export default function SentencesLearningPage() {
                         level_progress: progressPercentage,
                         completed: true,
                         completed_at: new Date().toISOString(),
-                        learned_items: progress
+                        learned_items: progressData
                     }));
                 }
             }
@@ -176,9 +290,9 @@ export default function SentencesLearningPage() {
             setSelectedSentence(selectedCategory.sentences[currentIndex + 1]);
         } else if (currentIndex === selectedCategory.sentences.length - 1) {
             // If last sentence in category, move to next category
-            const currentCategoryIndex = arabicSentences.indexOf(selectedCategory);
-            if (currentCategoryIndex < arabicSentences.length - 1) {
-                const nextCategory = arabicSentences[currentCategoryIndex + 1];
+            const currentCategoryIndex = allCategories.indexOf(selectedCategory);
+            if (currentCategoryIndex < allCategories.length - 1) {
+                const nextCategory = allCategories[currentCategoryIndex + 1];
                 setSelectedCategory(nextCategory);
                 setSelectedSentence(nextCategory.sentences[0]);
             }
@@ -190,172 +304,222 @@ export default function SentencesLearningPage() {
 
     const totalProgress = Math.round(
         (Object.keys(progress).filter(key => progress[key] === 100).length /
-            arabicSentences.reduce((sum, category) => sum + category.sentences.length, 0)) * 100
+            allCategories.reduce((sum, category) => sum + category.sentences.length, 0)) * 100
     );
 
     const isSentenceLearned = (category: string, sentence: string) => {
         return progress[`${category}-${sentence}`] === 100;
     };
 
-    const startPractice = () => {
-        setPracticeMode('practice');
-        setShowTranslation(false);
-        setShowWords(false);
-        setSelectedWord(null);
+    // التعامل مع إكمال التمارين
+    const handleExercisesComplete = (score: number, total: number) => {
+        // إعادة للوضع العادي بعد الانتهاء من التمارين
+        setShowSectionExercises(false);
+
+        // عرض النتيجة بشكل منبثق
+        toast.success(`أكملت التمارين بنتيجة ${score} من ${total}`, {
+            description: "استمر في التعلم والتدرب على الجمل الأخرى"
+        });
+
+        // إذا كانت النتيجة جيدة، نعتبر القسم مكتملاً
+        if (score / total >= 0.7) {
+            // وضع علامة تعلم على جميع جمل القسم الحالي
+            selectedCategory.sentences.forEach((sentence) => {
+                const sentenceKey = `${selectedCategory.id}-${sentence.sentence}`;
+                if (!progress[sentenceKey]) {
+                    setProgress(prev => ({
+                        ...prev,
+                        [sentenceKey]: 100
+                    }));
+                }
+            });
+
+            toast.success(`أحسنت! تم إكمال قسم ${selectedCategory.title} بنجاح`, {
+                icon: <Icons.Award className="text-yellow-500" />,
+            });
+        }
     };
 
-    // Function to generate practice questions from learned sentences
-    const generatePracticeQuestions = () => {
-        const learnedSentences = arabicSentences.flatMap(category =>
-            category.sentences.filter(sentence =>
-                isSentenceLearned(category.id, sentence.sentence)
-            )
-        );
-
-        if (learnedSentences.length === 0) {
-            toast.error('يجب عليك تعلم بعض الجمل أولاً قبل بدء التمارين');
-            setPracticeMode('learn');
+    // إضافة وظيفة لإنشاء فئة جديدة باستخدام النموذج اللغوي
+    const generateNewCategory = async () => {
+        if (!userId) {
+            toast.error('يجب تسجيل الدخول لاستخدام هذه الميزة');
             return;
         }
 
-        const questions: PracticeQuestion[] = [];
+        try {
+            setIsGenerating(true);
 
-        // Multiple choice questions
-        learnedSentences.forEach(sentence => {
-            questions.push({
-                type: 'multiple_choice',
-                sentence: sentence.sentence,
-                question: 'اختر الكلمة المناسبة لإكمال الجملة',
-                options: [
-                    ...sentence.words,
-                    ...learnedSentences
-                        .filter(s => s.sentence !== sentence.sentence)
-                        .flatMap(s => s.words)
-                        .slice(0, 3)
-                ].sort(() => Math.random() - 0.5).slice(0, 4),
-                correctAnswer: sentence.words[Math.floor(Math.random() * sentence.words.length)]
+            const response = await fetch('http://localhost:5000/api/learning/generate-sentence-category', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    category_name: categoryName || undefined,
+                    difficulty_level: difficultyLevel,
+                    num_sentences: numSentences,
+                    user_id: userId
+                }),
             });
 
-            // Add question about sentence type
-            questions.push({
-                type: 'multiple_choice',
-                sentence: sentence.sentence,
-                question: 'ما نوع هذه الجملة؟',
-                options: [
-                    'جملة اسمية',
-                    'جملة فعلية',
-                    'جملة استفهامية',
-                    'جملة تعجبية'
-                ],
-                correctAnswer: (() => {
-                    const firstWord = sentence.sentence.split(/\s+/)[0] || '';
-                    if (['هل', 'ما', 'متى', 'أين', 'كيف', 'لماذا'].includes(firstWord)) {
-                        return 'جملة استفهامية';
+            if (!response.ok) {
+                throw new Error('فشل في توليد فئة جديدة');
+            }
+
+            const result = await response.json();
+
+            if (result.success && result.category) {
+                // إضافة الفئة الجديدة إلى القائمة
+                const newCategory = result.category;
+
+                // تحديث قائمة الفئات
+                setAllCategories(prevCategories => [...prevCategories, newCategory]);
+
+                // إغلاق الحوار
+                setIsGenerateDialogOpen(false);
+
+                // عرض رسالة نجاح
+                toast.success('تم إنشاء فئة جديدة بنجاح!', {
+                    description: `تمت إضافة "${newCategory.title}" بـ ${newCategory.sentences.length} جمل`
+                });
+
+                // تعيين الفئة الجديدة كعلامة تبويب نشطة
+                setActiveTab(newCategory.id);
+
+                // مؤقت قصير للتأكد من اكتمال تحديث الحالة
+                setTimeout(() => {
+                    // تحديد الفئة المضافة حديثًا
+                    setSelectedCategory(newCategory);
+                    if (newCategory.sentences.length > 0) {
+                        setSelectedSentence(newCategory.sentences[0]);
                     }
-                    if (firstWord.match(/^(ي|ت|أ|ن)/)) {
-                        return 'جملة فعلية';
+
+                    // تمرير شريط التصنيفات إلى آخر عنصر (الفئة الجديدة)
+                    const scrollElement = scrollableRef.current;
+                    if (scrollElement) {
+                        scrollElement.scrollTo({
+                            left: scrollElement.scrollWidth,
+                            behavior: 'smooth'
+                        });
                     }
-                    if (sentence.sentence.includes('!')) {
-                        return 'جملة تعجبية';
-                    }
-                    return 'جملة اسمية';
-                })()
-            });
-        });
-
-        // Arrange words questions
-        learnedSentences.forEach(sentence => {
-            const shuffledWords = [...sentence.words].sort(() => Math.random() - 0.5);
-            questions.push({
-                type: 'arrange',
-                sentence: '',
-                question: 'رتب الكلمات لتكوين جملة صحيحة',
-                correctAnswer: sentence.words,
-                options: shuffledWords
-            });
-        });
-
-        // Complete the sentence questions
-        learnedSentences.forEach(sentence => {
-            const words = sentence.words;
-            const missingWordIndex = Math.floor(Math.random() * words.length);
-            const missingWord = words[missingWordIndex];
-            const questionWords = [...words];
-            questionWords[missingWordIndex] = '____';
-
-            questions.push({
-                type: 'complete',
-                sentence: questionWords.join(' '),
-                question: 'أكمل الجملة بالكلمة المناسبة',
-                options: [
-                    missingWord,
-                    ...learnedSentences
-                        .flatMap(s => s.words)
-                        .filter(w => w !== missingWord && w.length === missingWord.length)
-                        .slice(0, 3)
-                ].sort(() => Math.random() - 0.5),
-                correctAnswer: missingWord
-            });
-        });
-
-        // Shuffle questions and select a subset
-        setPracticeQuestions(questions.sort(() => Math.random() - 0.5).slice(0, 10));
-        setCurrentQuestionIndex(0);
-        setUserAnswer('');
-        setShowResult(false);
-        setPracticeScore(0);
+                }, 200);
+            } else {
+                throw new Error(result.message || 'فشل في توليد فئة جديدة');
+            }
+        } catch (error) {
+            console.error('Error generating category:', error);
+            toast.error('حدث خطأ في إنشاء الفئة الجديدة');
+        } finally {
+            setIsGenerating(false);
+        }
     };
 
-    const handleAnswerSubmit = () => {
-        const currentQuestion = practiceQuestions[currentQuestionIndex];
-        let correct = false;
+    // Update scroll indicators
+    const updateScrollIndicators = () => {
+        const scrollElement = scrollableRef.current;
+        if (scrollElement) {
+            setCanScrollLeft(scrollElement.scrollLeft > 0);
+            setCanScrollRight(
+                scrollElement.scrollLeft < scrollElement.scrollWidth - scrollElement.clientWidth - 10
+            );
+        }
+    };
 
-        if (currentQuestion.type === 'arrange') {
-            // For arrange questions, check if userAnswer is array and compare sentences
-            if (Array.isArray(userAnswer)) {
-                const userSentence = userAnswer.join(' ').trim();
-                const correctSentence = (currentQuestion.correctAnswer as string[]).join(' ').trim();
-                correct = userSentence === correctSentence;
-
-                // If incorrect, don't show the correct answer immediately
-                if (!correct) {
-                    toast.error('ترتيب الكلمات غير صحيح، حاول مرة أخرى');
-                    setShowResult(true);
-                    setTimeout(() => {
-                        setShowResult(false);
-                        setUserAnswer([]);
-                    }, 2000);
-                    return;
-                }
+    // Add an effect to check for scroll possibilities whenever categories change
+    useEffect(() => {
+        if (viewMode === 'scroll') {
+            updateScrollIndicators();
+            // Add scroll event listener to update indicators during scrolling
+            const scrollElement = scrollableRef.current;
+            if (scrollElement) {
+                scrollElement.addEventListener('scroll', updateScrollIndicators);
+                return () => scrollElement.removeEventListener('scroll', updateScrollIndicators);
             }
-        } else {
-            correct = userAnswer === currentQuestion.correctAnswer;
+        }
+    }, [allCategories, viewMode]);
+
+    // Also update indicators after layout changes
+    useEffect(() => {
+        const timer = setTimeout(updateScrollIndicators, 500);
+        return () => clearTimeout(timer);
+    }, [viewMode, isLoadingCategories, allCategories.length]);
+
+    // Handle speech completion
+    const handleSpeechComplete = async (results: { accuracy: number; recognizedText: string; errors: Array<{ word: string; type: 'severe' | 'minor' | 'correct' }> }) => {
+        if (userId) {
+            try {
+                // Save to backend
+                await speechService.saveSpeechActivity({
+                    user_id: userId,
+                    story_id: `sentence-${selectedCategory.id}-${selectedSentence.sentence.substring(0, 20)}`,
+                    original_text: selectedSentence.sentence,
+                    recognized_text: results.recognizedText,
+                    accuracy: results.accuracy
+                });
+
+                // Update local progress
+                const sentenceKey = `${selectedCategory.id}-${selectedSentence.sentence}`;
+                setProgress(prev => {
+                    const existingProgress = prev[sentenceKey];
+                    if (typeof existingProgress === 'number') {
+                        return {
+                            ...prev,
+                            [sentenceKey]: 100,
+                            [`${sentenceKey}_speech`]: {
+                                completed: true,
+                                accuracy: results.accuracy
+                            }
+                        } as ProgressState;
+                    } else {
+                        return {
+                            ...prev,
+                            [sentenceKey]: {
+                                ...(typeof existingProgress === 'object' ? existingProgress : {}),
+                                read: true,
+                                speechCompleted: true,
+                                speechAccuracy: results.accuracy
+                            }
+                        } as ProgressState;
+                    }
+                });
+
+                setSpeechAccuracy(results.accuracy);
+
+                if (results.accuracy >= 70) {
+                    toast.success('أحسنت! لقد تمكنت من قراءة الجملة بشكل جيد 🎉');
+                } else if (results.accuracy >= 50) {
+                    toast.info('جيد! استمر في التمرين لتحسين مهارات القراءة لديك.');
+                } else {
+                    toast.info('استمر في التمرين، ستتحسن مع الوقت!');
+                }
+
+                // Save progress to server
+                saveProgressToServer();
+            } catch (error) {
+                console.error('Error saving speech activity:', error);
+            }
+        }
+    };
+
+    // Handle speech accuracy change
+    const handleSpeechAccuracyChange = (accuracy: number) => {
+        setSpeechAccuracy(accuracy);
+    };
+
+    // Check if sentence has speech practice completed
+    const isSentenceSpeechCompleted = (categoryId: string, sentence: string) => {
+        const sentenceKey = `${categoryId}-${sentence}`;
+        const progressValue = progress[sentenceKey];
+
+        if (!progressValue) return false;
+
+        if (typeof progressValue === 'object') {
+            return 'speechCompleted' in progressValue && progressValue.speechCompleted === true;
         }
 
-        setIsCorrect(correct);
-        setShowResult(true);
-        if (correct) {
-            setPracticeScore(prev => prev + 1);
-            toast.success('إجابة صحيحة! 🎉');
-        }
-
-        setTimeout(() => {
-            if (currentQuestionIndex < practiceQuestions.length - 1) {
-                setCurrentQuestionIndex(prev => prev + 1);
-                setUserAnswer('');
-                setShowResult(false);
-            } else {
-                // Move to final results screen
-                const finalScore = practiceScore + (correct ? 1 : 0);
-                setPracticeScore(finalScore);
-                setCurrentQuestionIndex(practiceQuestions.length);
-
-                // Save progress if score is good
-                if (finalScore >= 7) {
-                    markAsLearned();
-                }
-            }
-        }, 2000);
+        // Check if there's a speech completion record
+        return !!progress[`${sentenceKey}_speech`];
     };
 
     return (
@@ -378,7 +542,7 @@ export default function SentencesLearningPage() {
                         animate={{ y: 0 }}
                         className="text-xl text-muted-foreground font-arabic"
                     >
-                        {practiceMode === 'learn' ? 'اختر فئة للبدء في تعلم جملها' : 'تدرب على فهم الجمل من خلال التمارين'}
+                        اختر فئة للبدء في تعلم جملها
                     </motion.p>
                 </div>
 
@@ -390,58 +554,154 @@ export default function SentencesLearningPage() {
                         </div>
                         <Progress value={totalProgress} className="h-2" />
 
-                        {totalProgress === 100 && (
-                            <div className="flex justify-center gap-4 mt-4">
-                                <Button
-                                    className="font-arabic text-lg group"
-                                    onClick={() => router.push('/dashboard')}
-                                >
-                                    <Icons.Home className="ml-2 h-5 w-5 group-hover:scale-110 transition-transform" />
-                                    العودة للوحة التحكم
-                                </Button>
-                                <Button
-                                    className="font-arabic text-lg group"
-                                    variant="outline"
-                                    onClick={() => {
-                                        setSelectedCategory(arabicSentences[0]);
-                                        setSelectedSentence(arabicSentences[0].sentences[0]);
-                                        setShowTranslation(false);
-                                        setShowWords(false);
-                                        setPracticeMode('learn');
-                                    }}
-                                >
-                                    <Icons.RefreshCw className="ml-2 h-5 w-5 group-hover:rotate-180 transition-transform" />
-                                    مراجعة الجمل
-                                </Button>
-                            </div>
-                        )}
+                        <div className="flex justify-center gap-4 mt-4">
+                            {totalProgress === 100 && (
+                                <>
+                                    <Button
+                                        className="font-arabic text-lg group"
+                                        onClick={() => router.push('/dashboard')}
+                                    >
+                                        <Icons.Home className="ml-2 h-5 w-5 group-hover:scale-110 transition-transform" />
+                                        العودة للوحة التحكم
+                                    </Button>
+                                    <Button
+                                        className="font-arabic text-lg group"
+                                        variant="outline"
+                                        onClick={() => {
+                                            setSelectedCategory(allCategories[0]);
+                                            setSelectedSentence(allCategories[0].sentences[0]);
+                                            setShowTranslation(false);
+                                            setShowWords(false);
+                                        }}
+                                    >
+                                        <Icons.RefreshCw className="ml-2 h-5 w-5 group-hover:rotate-180 transition-transform" />
+                                        مراجعة الجمل
+                                    </Button>
+                                </>
+                            )}
+                            <Button
+                                className="font-arabic text-lg group bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600"
+                                onClick={() => setIsGenerateDialogOpen(true)}
+                            >
+                                <Icons.Sparkles className="ml-2 h-5 w-5 group-hover:scale-110 transition-transform" />
+                                توليد فئة جديدة
+                            </Button>
+                        </div>
                     </div>
                 </Card>
 
-                <div className="flex justify-center gap-4 mb-6">
-                    <Button
-                        variant={practiceMode === 'learn' ? "default" : "outline"}
-                        className="font-arabic text-lg group"
-                        onClick={() => setPracticeMode('learn')}
-                    >
-                        <Icons.Book className="ml-2 h-5 w-5 group-hover:scale-110 transition-transform" />
-                        وضع التعلم
-                    </Button>
-                    <Button
-                        variant={practiceMode === 'practice' ? "default" : "outline"}
-                        className="font-arabic text-lg group"
-                        onClick={startPractice}
-                    >
-                        <Icons.GraduationCap className="ml-2 h-5 w-5 group-hover:scale-110 transition-transform" />
-                        وضع التدريب
-                    </Button>
-                </div>
+                <Tabs
+                    defaultValue={activeTab || allCategories[0]?.id}
+                    value={activeTab || allCategories[0]?.id}
+                    onValueChange={setActiveTab}
+                    className="space-y-4"
+                >
+                    <div className="relative w-full">
+                        <div className="flex justify-end flex-wrap mb-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setViewMode(viewMode === 'scroll' ? 'grid' : 'scroll')}
+                                className="font-arabic"
+                            >
+                                {viewMode === 'scroll' ? (
+                                    <>
+                                        <Icons.Grid className="ml-2 h-4 w-4" />
+                                        عرض شبكي
+                                    </>
+                                ) : (
+                                    <>
+                                        <Icons.ArrowLeftRight className="ml-2 h-4 w-4" />
+                                        عرض أفقي
+                                    </>
+                                )}
+                            </Button>
+                        </div>
 
-                {practiceMode === 'learn' ? (
-                    <Tabs defaultValue={selectedCategory.id} className="space-y-4">
-                        <ScrollArea className="w-full">
-                            <TabsList className="flex w-max px-4 mb-4">
-                                {arabicSentences.map((category) => (
+                        {isLoadingCategories ? (
+                            <div className="flex justify-center items-center py-4">
+                                <Icons.Loader2 className="h-8 w-8 animate-spin text-primary" />
+                                <span className="font-arabic mr-2">جاري تحميل الفئات...</span>
+                            </div>
+                        ) : viewMode === 'scroll' ? (
+                            <div className="relative">
+                                <ScrollArea className="w-full" scrollHideDelay={0}>
+                                    <div
+                                        ref={scrollableRef}
+                                        className="overflow-x-auto"
+                                        onScroll={updateScrollIndicators}
+                                    >
+                                        <div ref={tabsContainerRef} className="relative">
+                                            <TabsList className="flex w-max px-12 mb-4" key={allCategories.length}>
+                                                {allCategories.map((category) => (
+                                                    <TabsTrigger
+                                                        key={category.id}
+                                                        value={category.id}
+                                                        onClick={() => {
+                                                            setSelectedCategory(category);
+                                                            setSelectedSentence(category.sentences[0]);
+                                                            setShowTranslation(false);
+                                                            setShowWords(false);
+                                                        }}
+                                                        className="font-arabic text-lg px-6"
+                                                    >
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-2xl">{category.icon}</span>
+                                                            <span>{category.title}</span>
+                                                            <Badge variant="outline" className="ml-2">
+                                                                {category.sentences.filter(s =>
+                                                                    isSentenceLearned(category.id, s.sentence)
+                                                                ).length} / {category.sentences.length}
+                                                            </Badge>
+                                                        </div>
+                                                    </TabsTrigger>
+                                                ))}
+                                            </TabsList>
+                                        </div>
+                                    </div>
+                                </ScrollArea>
+
+                                {canScrollLeft && (
+                                    <Button
+                                        size="icon"
+                                        variant="outline"
+                                        className="absolute left-1 top-1/2 transform -translate-y-1/2 shadow-md rounded-full bg-background/80 backdrop-blur-sm hover:bg-background z-10"
+                                        onClick={() => {
+                                            const scrollElement = scrollableRef.current;
+                                            if (scrollElement) {
+                                                scrollElement.scrollTo({
+                                                    left: scrollElement.scrollLeft - 300,
+                                                    behavior: 'smooth'
+                                                });
+                                            }
+                                        }}
+                                    >
+                                        <Icons.ChevronLeft className="h-4 w-4" />
+                                    </Button>
+                                )}
+
+                                {canScrollRight && (
+                                    <Button
+                                        size="icon"
+                                        variant="outline"
+                                        className="absolute right-1 top-1/2 transform -translate-y-1/2 shadow-md rounded-full bg-background/80 backdrop-blur-sm hover:bg-background z-10"
+                                        onClick={() => {
+                                            const scrollElement = scrollableRef.current;
+                                            if (scrollElement) {
+                                                scrollElement.scrollTo({
+                                                    left: scrollElement.scrollLeft + 300,
+                                                    behavior: 'smooth'
+                                                });
+                                            }
+                                        }}
+                                    >
+                                        <Icons.ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                )}
+                            </div>
+                        ) : (
+                            <TabsList className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-2 bg-transparent h-auto flex-wrap">
+                                {allCategories.map((category) => (
                                     <TabsTrigger
                                         key={category.id}
                                         value={category.id}
@@ -451,33 +711,41 @@ export default function SentencesLearningPage() {
                                             setShowTranslation(false);
                                             setShowWords(false);
                                         }}
-                                        className="font-arabic text-lg px-6"
+                                        className="font-arabic p-4 h-auto w-full flex flex-col items-center justify-center gap-2 rounded-lg border shadow-sm data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
                                     >
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-2xl">{category.icon}</span>
-                                            <span>{category.title}</span>
-                                            <Badge variant="outline" className="ml-2">
-                                                {category.sentences.filter(s =>
-                                                    isSentenceLearned(category.id, s.sentence)
-                                                ).length} / {category.sentences.length}
-                                            </Badge>
-                                        </div>
+                                        <span className="text-3xl">{category.icon}</span>
+                                        <span className="text-center font-semibold">{category.title}</span>
+                                        <Badge variant="outline" className="mt-1 px-2 py-1">
+                                            {category.sentences.filter(s =>
+                                                isSentenceLearned(category.id, s.sentence)
+                                            ).length} / {category.sentences.length}
+                                        </Badge>
                                     </TabsTrigger>
                                 ))}
                             </TabsList>
-                        </ScrollArea>
+                        )}
+                    </div>
 
-                        {arabicSentences.map((category) => (
-                            <TabsContent key={category.id} value={category.id}>
-                                <Card className="p-6">
-                                    <div className="space-y-6">
-                                        <div className="text-center space-y-4">
-                                            <h3 className="text-2xl font-bold font-arabic">{category.title}</h3>
-                                            <p className="text-muted-foreground font-arabic">
-                                                {category.description}
-                                            </p>
-                                        </div>
+                    {allCategories.map((category) => (
+                        <TabsContent key={category.id} value={category.id}>
+                            <Card className="p-6">
+                                <div className="space-y-6">
+                                    <div className="text-center space-y-4">
+                                        <h3 className="text-2xl font-bold font-arabic">{category.title}</h3>
+                                        <p className="text-muted-foreground font-arabic">
+                                            {category.description}
+                                        </p>
+                                    </div>
 
+                                    {showSectionExercises && selectedCategory.id === category.id ? (
+                                        // عرض مكون تمارين القسم
+                                        <SectionExercises
+                                            sectionTitle={category.title}
+                                            sentences={category.sentences}
+                                            onComplete={handleExercisesComplete}
+                                        />
+                                    ) : (
+                                        // عرض محتوى القسم العادي
                                         <div className="grid gap-4">
                                             <Card className="p-6 text-center space-y-6">
                                                 <motion.div
@@ -552,7 +820,49 @@ export default function SentencesLearningPage() {
                                                             </motion.div>
                                                         )}
                                                     </AnimatePresence>
+
+                                                    {/* Add speech practice section */}
+                                                    <AnimatePresence mode="wait">
+                                                        {showSpeechPractice && (
+                                                            <motion.div
+                                                                initial={{ opacity: 0, y: 10 }}
+                                                                animate={{ opacity: 1, y: 0 }}
+                                                                exit={{ opacity: 0, y: -10 }}
+                                                                className="pt-4 border-t"
+                                                            >
+                                                                <SpeechRecognition
+                                                                    originalText={selectedSentence.sentence}
+                                                                    onAccuracyChange={handleSpeechAccuracyChange}
+                                                                    onComplete={handleSpeechComplete}
+                                                                />
+
+                                                                {userId && speechAccuracy > 0 && (
+                                                                    <div className="mt-6 pt-4 border-t">
+                                                                        <h3 className="text-xl font-bold font-arabic text-right mb-4">تحليل أداء النطق</h3>
+                                                                        <SpeechAnalytics
+                                                                            userId={userId}
+                                                                            storyId={`sentence-${selectedCategory.id}-${selectedSentence.sentence.substring(0, 20)}`}
+                                                                        />
+                                                                    </div>
+                                                                )}
+                                                            </motion.div>
+                                                        )}
+                                                    </AnimatePresence>
                                                 </motion.div>
+
+                                                {/* Add Image Generator Component */}
+                                                <AnimatePresence>
+                                                    <motion.div
+                                                        initial={{ opacity: 0, y: 20 }}
+                                                        animate={{ opacity: 1, y: 0 }}
+                                                        transition={{ delay: 0.3 }}
+                                                    >
+                                                        <ImageGenerator
+                                                            text={selectedSentence.sentence}
+                                                            className="mt-4"
+                                                        />
+                                                    </motion.div>
+                                                </AnimatePresence>
 
                                                 <div className="flex justify-center gap-4">
                                                     <Button
@@ -579,21 +889,41 @@ export default function SentencesLearningPage() {
                                                     </Button>
                                                 </div>
 
-                                                <Button
-                                                    onClick={markAsLearned}
-                                                    className={cn(
-                                                        "w-full font-arabic text-lg transition-all",
-                                                        isSentenceLearned(selectedCategory.id, selectedSentence.sentence)
-                                                            ? "bg-green-500 hover:bg-green-600"
-                                                            : ""
-                                                    )}
-                                                    disabled={isSentenceLearned(selectedCategory.id, selectedSentence.sentence)}
-                                                >
-                                                    {isSentenceLearned(selectedCategory.id, selectedSentence.sentence)
-                                                        ? <><Icons.CheckCircle className="ml-2 h-5 w-5" /> تم التعلم</>
-                                                        : <><Icons.Check className="ml-2 h-5 w-5" /> تعلمت هذه الجملة</>
-                                                    }
-                                                </Button>
+                                                <div className="flex justify-center gap-3 mt-4">
+                                                    <Button
+                                                        onClick={markAsLearned}
+                                                        className={cn(
+                                                            "font-arabic text-lg transition-all",
+                                                            isSentenceLearned(selectedCategory.id, selectedSentence.sentence)
+                                                                ? "bg-green-500 hover:bg-green-600"
+                                                                : ""
+                                                        )}
+                                                        disabled={isSentenceLearned(selectedCategory.id, selectedSentence.sentence)}
+                                                    >
+                                                        {isSentenceLearned(selectedCategory.id, selectedSentence.sentence)
+                                                            ? <><Icons.CheckCircle className="ml-2 h-5 w-5" /> تم التعلم</>
+                                                            : <><Icons.Check className="ml-2 h-5 w-5" /> تعلمت هذه الجملة</>
+                                                        }
+                                                    </Button>
+
+                                                    <Button
+                                                        variant="outline"
+                                                        onClick={() => setShowSectionExercises(true)}
+                                                        className="font-arabic"
+                                                    >
+                                                        <Icons.GraduationCap className="ml-2 h-5 w-5" />
+                                                        تمارين القسم
+                                                    </Button>
+
+                                                    <Button
+                                                        variant={showSpeechPractice ? "default" : "outline"}
+                                                        onClick={() => setShowSpeechPractice(!showSpeechPractice)}
+                                                        className="font-arabic"
+                                                    >
+                                                        <Icons.Mic className="ml-2 h-5 w-5" />
+                                                        {showSpeechPractice ? 'إخفاء تمرين النطق' : 'تمرين النطق'}
+                                                    </Button>
+                                                </div>
                                             </Card>
 
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -635,292 +965,88 @@ export default function SentencesLearningPage() {
                                                 ))}
                                             </div>
                                         </div>
-                                    </div>
-                                </Card>
-                            </TabsContent>
-                        ))}
-                    </Tabs>
-                ) : (
-                    <Card className="p-6">
-                        <div className="space-y-6">
-                            {practiceQuestions.length === 0 ? (
-                                <div className="text-center space-y-6">
-                                    <motion.div
-                                        initial={{ opacity: 0, y: 20 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                    >
-                                        <h3 className="text-2xl font-bold font-arabic mb-4">تمارين على الجمل</h3>
-                                        <p className="text-muted-foreground font-arabic mb-8">
-                                            اختبر فهمك للجمل من خلال التمارين التفاعلية
-                                        </p>
-                                        <Button
-                                            className="font-arabic text-lg"
-                                            onClick={generatePracticeQuestions}
-                                        >
-                                            <Icons.Play className="ml-2 h-5 w-5" />
-                                            ابدأ التمرين
-                                        </Button>
-                                    </motion.div>
-                                </div>
-                            ) : currentQuestionIndex === practiceQuestions.length ? (
-                                <div className="text-center space-y-6">
-                                    <motion.div
-                                        initial={{ opacity: 0, y: 20 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                    >
-                                        <h3 className="text-2xl font-bold font-arabic mb-4">
-                                            نتيجة التمرين
-                                        </h3>
-                                        <div className="text-4xl font-bold mb-4">
-                                            {practiceScore}/{practiceQuestions.length}
-                                        </div>
-                                        <p className="text-muted-foreground font-arabic mb-8">
-                                            {practiceScore >= 7
-                                                ? "أحسنت! لقد اجتزت التمرين بنجاح 🎉"
-                                                : "حاول مرة أخرى للحصول على نتيجة أفضل"}
-                                        </p>
-                                        <div className="flex justify-center gap-4">
-                                            <Button
-                                                className="font-arabic text-lg"
-                                                onClick={() => {
-                                                    generatePracticeQuestions();
-                                                    setCurrentQuestionIndex(0);
-                                                    setPracticeScore(0);
-                                                    setUserAnswer('');
-                                                    setShowResult(false);
-                                                }}
-                                            >
-                                                <Icons.RefreshCw className="ml-2 h-5 w-5" />
-                                                إعادة التمرين
-                                            </Button>
-                                            <Button
-                                                variant="outline"
-                                                className="font-arabic text-lg"
-                                                onClick={() => {
-                                                    setPracticeMode('learn');
-                                                    setCurrentQuestionIndex(0);
-                                                    setPracticeScore(0);
-                                                    setPracticeQuestions([]);
-                                                }}
-                                            >
-                                                <Icons.ArrowRight className="ml-2 h-5 w-5" />
-                                                العودة للتعلم
-                                            </Button>
-                                        </div>
-                                    </motion.div>
-                                </div>
-                            ) : (
-                                <motion.div
-                                    key={currentQuestionIndex}
-                                    initial={{ opacity: 0, x: 20 }}
-                                    animate={{ opacity: 1, x: 0 }}
-                                    exit={{ opacity: 0, x: -20 }}
-                                    className="space-y-6"
-                                >
-                                    <div className="flex justify-between items-center">
-                                        <Badge variant="outline" className="font-arabic">
-                                            سؤال {currentQuestionIndex + 1} من {practiceQuestions.length}
-                                        </Badge>
-                                        <div className="flex items-center gap-2">
-                                            <Badge variant="outline" className="font-arabic">
-                                                النتيجة: {practiceScore}/{currentQuestionIndex}
-                                            </Badge>
-                                            <Progress
-                                                value={(currentQuestionIndex / practiceQuestions.length) * 100}
-                                                className="w-24 h-2"
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div className="text-center space-y-4">
-                                        <h3 className="text-xl font-bold font-arabic">
-                                            {practiceQuestions[currentQuestionIndex].question}
-                                        </h3>
-                                        {practiceQuestions[currentQuestionIndex].type !== 'arrange' && (
-                                            <div className="text-2xl font-arabic p-4 bg-muted/20 rounded-lg">
-                                                {practiceQuestions[currentQuestionIndex].sentence}
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="space-y-6">
-                                        {practiceQuestions[currentQuestionIndex].type === 'multiple_choice' && (
-                                            <>
-                                                <RadioGroup
-                                                    value={userAnswer as string}
-                                                    onValueChange={setUserAnswer}
-                                                    className="space-y-3"
-                                                    dir="rtl"
-                                                >
-                                                    {practiceQuestions[currentQuestionIndex].options?.map((option, index) => (
-                                                        <motion.div
-                                                            key={index}
-                                                            initial={{ opacity: 0, y: 10 }}
-                                                            animate={{ opacity: 1, y: 0 }}
-                                                            transition={{ delay: index * 0.1 }}
-                                                        >
-                                                            <Label
-                                                                className={cn(
-                                                                    "flex items-center p-4 rounded-lg border cursor-pointer transition-colors hover:bg-muted/5",
-                                                                    showResult && option === practiceQuestions[currentQuestionIndex].correctAnswer && "bg-green-100 border-green-500",
-                                                                    showResult && userAnswer === option && option !== practiceQuestions[currentQuestionIndex].correctAnswer && "bg-red-100 border-red-500"
-                                                                )}
-                                                            >
-                                                                <RadioGroupItem
-                                                                    value={option}
-                                                                    disabled={showResult}
-                                                                    className="ml-4"
-                                                                />
-                                                                <span className="font-arabic text-lg">{option}</span>
-                                                            </Label>
-                                                        </motion.div>
-                                                    ))}
-                                                </RadioGroup>
-
-                                                {showResult && !isCorrect && (
-                                                    <motion.div
-                                                        initial={{ opacity: 0, y: 20 }}
-                                                        animate={{ opacity: 1, y: 0 }}
-                                                        className="text-center mt-4 p-4 bg-red-50 rounded-lg border border-red-200"
-                                                    >
-                                                        <p className="text-red-500 font-arabic mb-2">إجابة غير صحيحة</p>
-                                                        <p className="text-muted-foreground font-arabic">
-                                                            الإجابة الصحيحة هي: <span className="font-bold text-foreground">{practiceQuestions[currentQuestionIndex].correctAnswer}</span>
-                                                        </p>
-                                                    </motion.div>
-                                                )}
-                                            </>
-                                        )}
-
-                                        {practiceQuestions[currentQuestionIndex].type === 'arrange' && (
-                                            <div className="space-y-6">
-                                                <div className="flex flex-wrap gap-2 justify-center" dir="rtl">
-                                                    {practiceQuestions[currentQuestionIndex].options?.map((word, index) => (
-                                                        <motion.div
-                                                            key={index}
-                                                            initial={{ opacity: 0, scale: 0.8 }}
-                                                            animate={{ opacity: 1, scale: 1 }}
-                                                            transition={{ delay: index * 0.1 }}
-                                                            className={cn(
-                                                                "bg-primary/10 px-4 py-2 rounded-full font-arabic cursor-pointer hover:bg-primary/20 transition-colors",
-                                                                Array.isArray(userAnswer) && userAnswer.includes(word) && "opacity-50 cursor-not-allowed"
-                                                            )}
-                                                            onClick={() => {
-                                                                if (!showResult && (!Array.isArray(userAnswer) || !userAnswer.includes(word))) {
-                                                                    const currentAnswer = Array.isArray(userAnswer) ? userAnswer : [];
-                                                                    setUserAnswer([...currentAnswer, word]);
-                                                                }
-                                                            }}
-                                                        >
-                                                            {word}
-                                                        </motion.div>
-                                                    ))}
-                                                </div>
-
-                                                {Array.isArray(userAnswer) && userAnswer.length > 0 && (
-                                                    <div className="mt-8">
-                                                        <h4 className="text-lg font-bold font-arabic mb-4">جملتك:</h4>
-                                                        <div className="flex flex-wrap gap-2 justify-center bg-muted/20 p-6 rounded-lg min-h-[100px]" dir="rtl">
-                                                            {userAnswer.map((word, index) => (
-                                                                <motion.div
-                                                                    key={index}
-                                                                    className={cn(
-                                                                        "bg-primary/20 px-4 py-2 rounded-full font-arabic cursor-pointer hover:bg-primary/30 transition-colors",
-                                                                        showResult && isCorrect && "bg-green-100 hover:bg-green-200",
-                                                                        showResult && !isCorrect && "bg-red-100 hover:bg-red-200"
-                                                                    )}
-                                                                    onClick={() => {
-                                                                        if (!showResult) {
-                                                                            const newAnswer = [...userAnswer];
-                                                                            newAnswer.splice(index, 1);
-                                                                            setUserAnswer(newAnswer);
-                                                                        }
-                                                                    }}
-                                                                >
-                                                                    {word}
-                                                                </motion.div>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
-
-                                                {showResult && !isCorrect && (
-                                                    <motion.div
-                                                        initial={{ opacity: 0, y: 20 }}
-                                                        animate={{ opacity: 1, y: 0 }}
-                                                        className="text-center text-red-500 font-arabic"
-                                                    >
-                                                        حاول مرة أخرى
-                                                    </motion.div>
-                                                )}
-                                            </div>
-                                        )}
-
-                                        {practiceQuestions[currentQuestionIndex].type === 'complete' && (
-                                            <RadioGroup
-                                                value={userAnswer as string}
-                                                onValueChange={setUserAnswer}
-                                                className="space-y-2"
-                                            >
-                                                {practiceQuestions[currentQuestionIndex].options?.map((option, index) => (
-                                                    <motion.div
-                                                        key={index}
-                                                        initial={{ opacity: 0, y: 10 }}
-                                                        animate={{ opacity: 1, y: 0 }}
-                                                        transition={{ delay: index * 0.1 }}
-                                                    >
-                                                        <Label
-                                                            className={cn(
-                                                                "flex items-center space-x-2 space-x-reverse p-4 rounded-lg border cursor-pointer transition-colors",
-                                                                showResult && option === practiceQuestions[currentQuestionIndex].correctAnswer && "bg-green-100 border-green-500",
-                                                                showResult && userAnswer === option && option !== practiceQuestions[currentQuestionIndex].correctAnswer && "bg-red-100 border-red-500"
-                                                            )}
-                                                        >
-                                                            <RadioGroupItem value={option} disabled={showResult} />
-                                                            <span className="font-arabic text-lg">{option}</span>
-                                                        </Label>
-                                                    </motion.div>
-                                                ))}
-                                            </RadioGroup>
-                                        )}
-                                    </div>
-
-                                    {!showResult && (
-                                        <Button
-                                            className="w-full font-arabic text-lg"
-                                            onClick={handleAnswerSubmit}
-                                            disabled={!userAnswer}
-                                        >
-                                            <Icons.Check className="ml-2 h-5 w-5" />
-                                            تحقق من الإجابة
-                                        </Button>
                                     )}
-
-                                    {showResult && (
-                                        <motion.div
-                                            initial={{ opacity: 0, y: 20 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            className="text-center"
-                                        >
-                                            <div className={cn(
-                                                "text-2xl font-bold mb-4",
-                                                isCorrect ? "text-green-500" : "text-red-500"
-                                            )}>
-                                                {isCorrect ? "إجابة صحيحة! 🎉" : "حاول مرة أخرى"}
-                                            </div>
-                                            {!isCorrect && (
-                                                <div className="text-muted-foreground font-arabic">
-                                                    الإجابة الصحيحة: {practiceQuestions[currentQuestionIndex].correctAnswer}
-                                                </div>
-                                            )}
-                                        </motion.div>
-                                    )}
-                                </motion.div>
-                            )}
-                        </div>
-                    </Card>
-                )}
+                                </div>
+                            </Card>
+                        </TabsContent>
+                    ))}
+                </Tabs>
             </div>
+
+            {/* حوار توليد فئة جديدة */}
+            <Dialog open={isGenerateDialogOpen} onOpenChange={setIsGenerateDialogOpen}>
+                <DialogContent className="sm:max-w-[425px]">
+                    <DialogHeader>
+                        <DialogTitle className="font-arabic text-xl">إنشاء فئة جديدة من الجمل</DialogTitle>
+                        <DialogDescription className="font-arabic">
+                            سيتم استخدام الذكاء الاصطناعي لتوليد فئة جديدة من الجمل المناسبة للأطفال
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4 font-arabic">
+                        <div className="grid gap-2">
+                            <Label className="font-arabic" htmlFor="category-name">اسم الفئة (اختياري)</Label>
+                            <Input
+                                id="category-name"
+                                placeholder="اترك فارغًا لاقتراح فئة تلقائيًا"
+                                value={categoryName}
+                                onChange={(e) => setCategoryName(e.target.value)}
+                                className="font-arabic"
+                                dir="rtl"
+                            />
+                        </div>
+                        <div className="grid gap-2">
+                            <Label className="font-arabic" htmlFor="difficulty">مستوى الصعوبة</Label>
+                            <Select value={difficultyLevel} onValueChange={setDifficultyLevel}>
+                                <SelectTrigger id="difficulty" className="font-arabic">
+                                    <SelectValue placeholder="اختر المستوى" />
+                                </SelectTrigger>
+                                <SelectContent className="font-arabic">
+                                    <SelectItem value="beginner">مبتدئ</SelectItem>
+                                    <SelectItem value="intermediate">متوسط</SelectItem>
+                                    <SelectItem value="advanced">متقدم</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid gap-2">
+                            <Label className="font-arabic" htmlFor="num-sentences">عدد الجمل</Label>
+                            <Select
+                                value={String(numSentences)}
+                                onValueChange={(val) => setNumSentences(Number(val))}
+                            >
+                                <SelectTrigger id="num-sentences" className="font-arabic">
+                                    <SelectValue placeholder="عدد الجمل" />
+                                </SelectTrigger>
+                                <SelectContent className="font-arabic">
+                                    <SelectItem value="3">3 جمل</SelectItem>
+                                    <SelectItem value="5">5 جمل</SelectItem>
+                                    <SelectItem value="7">7 جمل</SelectItem>
+                                    <SelectItem value="10">10 جمل</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button
+                            type="submit"
+                            onClick={generateNewCategory}
+                            disabled={isGenerating}
+                            className="font-arabic"
+                        >
+                            {isGenerating ? (
+                                <>
+                                    <Icons.Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                                    جارِ التوليد...
+                                </>
+                            ) : (
+                                <>
+                                    <Icons.Sparkles className="ml-2 h-4 w-4" />
+                                    توليد الفئة
+                                </>
+                            )}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <CelebrationEffects
                 isOpen={showCelebration}

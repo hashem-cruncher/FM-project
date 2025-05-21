@@ -298,7 +298,7 @@ export function SpeechRecognition({
             .trim();
     };
 
-    // Add a new function for proper Arabic text tokenization
+    // Improved tokenization for Arabic text
     const tokenizeArabicText = (text: string) => {
         // First normalize the text
         const normalized = normalizeArabicText(text);
@@ -332,17 +332,32 @@ export function SpeechRecognition({
             ['ق', 'ك'],     // qaf and kaf
         ];
 
+        // Less similar but sometimes confused characters
+        const lessSimialarPairs = [
+            ['س', 'ش'],    // seen and sheen
+            ['ل', 'ن'],    // lam and noon
+            ['ب', 'ت'],    // ba and ta
+            ['ج', 'خ'],    // jeem and khaa
+            ['ر', 'ز'],    // ra and zay
+        ];
+
         // Cost matrix for Levenshtein distance calculation
         const costs = {
-            insertion: 1,
-            deletion: 1,
-            substitution: 2,
-            similarSubstitution: 1 // Lower cost for similar phoneme substitution
+            insertion: 2,
+            deletion: 2,
+            substitution: 3,
+            similarSubstitution: 1, // Lower cost for similar phoneme substitution
+            lessSimialarSubstitution: 2 // Medium cost for less similar phoneme substitution
         };
 
         // Function to check if two characters are phonetically similar
         const areSimilar = (char1: string, char2: string) => {
             return similarGroups.some(group => group.includes(char1) && group.includes(char2));
+        };
+
+        // Function to check if two characters are somewhat similar
+        const areSomewhatSimilar = (char1: string, char2: string) => {
+            return lessSimialarPairs.some(pair => pair.includes(char1) && pair.includes(char2));
         };
 
         // Enhanced Levenshtein distance with phonetic awareness
@@ -362,9 +377,13 @@ export function SpeechRecognition({
                 if (word1[i - 1] === word2[j - 1]) {
                     dp[i][j] = dp[i - 1][j - 1]; // No cost for match
                 } else {
-                    const substitutionCost = areSimilar(word1[i - 1], word2[j - 1])
-                        ? costs.similarSubstitution
-                        : costs.substitution;
+                    let substitutionCost = costs.substitution;
+
+                    if (areSimilar(word1[i - 1], word2[j - 1])) {
+                        substitutionCost = costs.similarSubstitution;
+                    } else if (areSomewhatSimilar(word1[i - 1], word2[j - 1])) {
+                        substitutionCost = costs.lessSimialarSubstitution;
+                    }
 
                     dp[i][j] = Math.min(
                         dp[i - 1][j] + costs.deletion,      // deletion
@@ -379,9 +398,14 @@ export function SpeechRecognition({
         const maxLen = Math.max(m, n);
         const maxPossibleDistance = maxLen * costs.substitution; // Worst case: all substitutions
         const distance = dp[m][n];
+
+        // Apply stricter similarity scoring
         const similarity = Math.max(0, (maxPossibleDistance - distance) / maxPossibleDistance * 100);
 
-        return Math.min(100, similarity);
+        // Apply additional penalty for length difference
+        const lengthDiffPenalty = Math.abs(m - n) * 5; // 5% penalty per character difference
+
+        return Math.max(0, Math.min(100, similarity - lengthDiffPenalty));
     };
 
     // Completely revamp the findWordErrors function for better Arabic processing
@@ -414,7 +438,9 @@ export function SpeechRecognition({
             for (let j = 1; j <= n; j++) {
                 // Calculate similarity between words
                 const similarity = calculateWordSimilarity(originalWords[i - 1], recognizedWords[j - 1]);
-                const matchCost = similarity >= 90 ? 0 : (similarity >= 70 ? 0.5 : 1);
+
+                // More precise threshold for different error types
+                const matchCost = similarity >= 95 ? 0 : (similarity >= 80 ? 0.5 : 1);
 
                 // Decide on best operation
                 const options = [
@@ -441,14 +467,18 @@ export function SpeechRecognition({
             if (i > 0 && j > 0 && backtrack[i][j] === 'diag') {
                 // Words are aligned (match or substitution)
                 const similarity = calculateWordSimilarity(originalWords[i - 1], recognizedWords[j - 1]);
+                const normalizedOriginal = normalizeArabicText(originalWords[i - 1]);
+                const normalizedRecognized = normalizeArabicText(recognizedWords[j - 1]);
 
-                if (similarity >= 90) {
+                // Use stricter thresholds for error classification
+                // If words are different even after normalization, they should be classified as errors
+                if (normalizedOriginal === normalizedRecognized || similarity >= 95) {
                     errors.unshift({
                         word: originalWords[i - 1],
                         type: 'correct',
                         matched: recognizedWords[j - 1]
                     });
-                } else if (similarity >= 70) {
+                } else if (similarity >= 75) {
                     errors.unshift({
                         word: originalWords[i - 1],
                         type: 'minor',
@@ -466,7 +496,8 @@ export function SpeechRecognition({
                 // Word in original text is missing in recognized text
                 errors.unshift({
                     word: originalWords[i - 1],
-                    type: 'severe'
+                    type: 'severe',
+                    matched: 'مفقود' // Mark as missing
                 });
                 i--;
             } else {
@@ -480,49 +511,81 @@ export function SpeechRecognition({
 
     // Improved text highlighting function that guarantees all words are processed
     const generateHighlightedText = (text: string, errors: Array<{ word: string; type: 'severe' | 'minor' | 'correct'; matched?: string }>) => {
-        // Create a map for faster lookup during rendering
+        // Extract words from original text, preserving spaces for reconstruction
+        const words = [];
+        let currentWord = '';
+        let spaces = '';
+
+        // Better tokenization that preserves original spacing
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            if (char === ' ' || char === '\t' || char === '\n') {
+                if (currentWord) {
+                    words.push({ word: currentWord, spaces: '' });
+                    currentWord = '';
+                }
+                spaces += char;
+            } else {
+                if (spaces) {
+                    if (words.length > 0) {
+                        words[words.length - 1].spaces = spaces;
+                    }
+                    spaces = '';
+                }
+                currentWord += char;
+            }
+        }
+
+        // Add the last word if exists
+        if (currentWord) {
+            words.push({ word: currentWord, spaces: spaces });
+        }
+
+        // Create a map for error lookup
         const errorMap = new Map();
         errors.forEach(error => {
             errorMap.set(normalizeArabicText(error.word), error);
         });
 
-        // Process the original text to ensure all words are covered
-        const words = tokenizeArabicText(text);
-
         return (
             <div className="text-right font-arabic leading-relaxed" dir="rtl">
-                {words.map((word, index) => {
+                {words.map(({ word, spaces }, index) => {
                     const normalizedWord = normalizeArabicText(word);
                     const error = errorMap.get(normalizedWord);
 
+                    // Special case for punctuation
+                    const isPunctuation = /^[.،؛؟!:"""''()[\]{}]$/.test(word);
+
                     // Determine class based on error type
-                    let colorClass = 'text-gray-700'; // Default color for punctuation and unmatched words
+                    let colorClass = 'text-gray-700'; // Default
+                    let tooltipText = '';
 
                     if (error) {
                         if (error.type === 'severe') {
                             colorClass = 'text-red-600 font-bold';
+                            tooltipText = error.matched === 'مفقود' ? 'مفقود' : `نطقت: ${error.matched}`;
                         } else if (error.type === 'minor') {
                             colorClass = 'text-yellow-600 font-semibold';
+                            tooltipText = `نطقت: ${error.matched}`;
                         } else if (error.type === 'correct') {
                             colorClass = 'text-green-600';
                         }
                     }
 
-                    // Handle punctuation differently
-                    const isPunctuation = /^[.،؛؟!:"""''()[\]{}]$/.test(word);
-
                     return (
-                        <span
-                            key={index}
-                            className={`${colorClass} ${isPunctuation ? '' : 'mx-1'} ${error?.matched ? 'relative group' : ''}`}
-                            title={error?.matched ? `Recognized as: ${error.matched}` : undefined}
-                        >
-                            {word}
-                            {error?.matched && error.type !== 'correct' && (
-                                <span className="absolute bottom-full right-0 bg-black text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                                    {error.matched}
-                                </span>
-                            )}
+                        <span key={index}>
+                            <span
+                                className={`${colorClass} ${isPunctuation ? '' : 'mx-[2px]'} ${error?.matched ? 'relative group cursor-help' : ''}`}
+                                title={tooltipText}
+                            >
+                                {word}
+                                {error?.matched && error.type !== 'correct' && (
+                                    <span className="absolute -bottom-8 right-0 bg-black text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+                                        {tooltipText}
+                                    </span>
+                                )}
+                            </span>
+                            {spaces && <span className="whitespace-pre">{spaces}</span>}
                         </span>
                     );
                 })}

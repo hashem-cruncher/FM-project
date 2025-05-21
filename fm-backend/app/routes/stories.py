@@ -9,6 +9,7 @@ import traceback
 import json
 import re
 import random
+import threading
 
 logger = logging.getLogger(__name__)
 stories_bp = Blueprint("stories", __name__)
@@ -131,87 +132,97 @@ def generate_story(user_id):
             "error_limit", 15
         )  # زيادة الحد لضمان الحصول على كلمات كافية بعد التصفية
 
-        # الحصول على أخطاء النطق للمستخدم
-        speech_errors = (
-            db.session.query(
-                SpeechErrorRecord.original_word,
-                SpeechErrorRecord.error_category,
-                func.count(SpeechErrorRecord.id).label("error_count"),
-            )
-            .filter_by(user_id=user_id)
-            .group_by(SpeechErrorRecord.original_word, SpeechErrorRecord.error_category)
-            .order_by(func.count(SpeechErrorRecord.id).desc())
-            .limit(
-                error_limit * 2
-            )  # ضاعف الحد لضمان وجود عدد كافٍ من الكلمات بعد الفلترة
-            .all()
-        )
+        # التحقق من وجود كلمات مخصصة في الطلب
+        custom_words = data.get("custom_words")
 
-        # تصفية الكلمات الصالحة فقط
-        filtered_errors = []
-        for error in speech_errors:
-            if is_valid_word(error.original_word):
-                filtered_errors.append(error)
-
-        # إذا كان لدينا أقل من 5 كلمات، استخدم بعض الكلمات من أنشطة النطق السابقة
-        if len(filtered_errors) < 5:
-            recent_activities = (
-                SpeechActivity.query.filter_by(user_id=user_id)
-                .order_by(SpeechActivity.created_at.desc())
-                .limit(5)
+        if custom_words and isinstance(custom_words, list) and len(custom_words) > 0:
+            # استخدام الكلمات المخصصة التي تم اختيارها من قبل المستخدم
+            error_words = custom_words
+            logger.info(f"Using {len(error_words)} custom words for story generation")
+        else:
+            # الحصول على أخطاء النطق للمستخدم
+            speech_errors = (
+                db.session.query(
+                    SpeechErrorRecord.original_word,
+                    SpeechErrorRecord.error_category,
+                    func.count(SpeechErrorRecord.id).label("error_count"),
+                )
+                .filter_by(user_id=user_id)
+                .group_by(
+                    SpeechErrorRecord.original_word, SpeechErrorRecord.error_category
+                )
+                .order_by(func.count(SpeechErrorRecord.id).desc())
+                .limit(
+                    error_limit * 2
+                )  # ضاعف الحد لضمان وجود عدد كافٍ من الكلمات بعد الفلترة
                 .all()
             )
 
-            sample_words = set()  # استخدام مجموعة لتجنب التكرار
-            for activity in recent_activities:
-                if activity.original_text:
-                    words = activity.original_text.split()
-                    for word in words:
-                        if is_valid_word(word) and word not in sample_words:
-                            sample_words.add(word)
+            # تصفية الكلمات الصالحة فقط
+            filtered_errors = []
+            for error in speech_errors:
+                if is_valid_word(error.original_word):
+                    filtered_errors.append(error)
 
-            # إنشاء كائنات شبيهة بأخطاء النطق من الكلمات العينة
-            for word in sample_words:
-                sample_error = type(
-                    "obj",
-                    (object,),
-                    {
-                        "original_word": word,
-                        "error_category": "general",
-                        "error_count": 1,
-                    },
+            # إذا كان لدينا أقل من 5 كلمات، استخدم بعض الكلمات من أنشطة النطق السابقة
+            if len(filtered_errors) < 5:
+                recent_activities = (
+                    SpeechActivity.query.filter_by(user_id=user_id)
+                    .order_by(SpeechActivity.created_at.desc())
+                    .limit(5)
+                    .all()
                 )
-                filtered_errors.append(sample_error)
 
-        # اختيار عشوائي للكلمات من القائمة المصفاة
-        # وضمان أننا لا نستخدم أكثر من error_limit
-        if len(filtered_errors) > error_limit:
-            selected_errors = random.sample(
-                filtered_errors, min(error_limit, len(filtered_errors))
-            )
-        else:
-            selected_errors = filtered_errors
+                sample_words = set()  # استخدام مجموعة لتجنب التكرار
+                for activity in recent_activities:
+                    if activity.original_text:
+                        words = activity.original_text.split()
+                        for word in words:
+                            if is_valid_word(word) and word not in sample_words:
+                                sample_words.add(word)
 
-        # مزج الترتيب للتأكد من أن الكلمات مختلفة في كل مرة
-        random.shuffle(selected_errors)
+                # إنشاء كائنات شبيهة بأخطاء النطق من الكلمات العينة
+                for word in sample_words:
+                    sample_error = type(
+                        "obj",
+                        (object,),
+                        {
+                            "original_word": word,
+                            "error_category": "general",
+                            "error_count": 1,
+                        },
+                    )
+                    filtered_errors.append(sample_error)
 
-        # تحضير بيانات الأخطاء للإرسال إلى خدمة الذكاء الاصطناعي
-        error_words = [
-            {
-                "word": error.original_word,
-                "category": error.error_category,
-                "count": error.error_count,
-            }
-            for error in selected_errors
-        ]
+            # اختيار عشوائي للكلمات من القائمة المصفاة
+            # وضمان أننا لا نستخدم أكثر من error_limit
+            if len(filtered_errors) > error_limit:
+                selected_errors = random.sample(
+                    filtered_errors, min(error_limit, len(filtered_errors))
+                )
+            else:
+                selected_errors = filtered_errors
 
-        # إذا لم نجد أي كلمات صالحة، استخدم كلمات افتراضية للتدريب
-        if not error_words:
-            default_words = ["مدرسة", "كتاب", "قلم", "طالب", "معلم"]
+            # مزج الترتيب للتأكد من أن الكلمات مختلفة في كل مرة
+            random.shuffle(selected_errors)
+
+            # تحضير بيانات الأخطاء للإرسال إلى خدمة الذكاء الاصطناعي
             error_words = [
-                {"word": word, "category": "default", "count": 1}
-                for word in default_words
+                {
+                    "word": error.original_word,
+                    "category": error.error_category,
+                    "count": error.error_count,
+                }
+                for error in selected_errors
             ]
+
+            # إذا لم نجد أي كلمات صالحة، استخدم كلمات افتراضية للتدريب
+            if not error_words:
+                default_words = ["مدرسة", "كتاب", "قلم", "طالب", "معلم"]
+                error_words = [
+                    {"word": word, "category": "default", "count": 1}
+                    for word in default_words
+                ]
 
         # إنشاء قصة باستخدام OpenAI
         ai_service = AIService()
@@ -268,27 +279,51 @@ def generate_exercises(user_id):
             "error_limit", 15
         )  # زيادة الحد لضمان الحصول على كلمات كافية بعد التصفية
 
-        # الحصول على أخطاء النطق للمستخدم
-        speech_errors = (
-            db.session.query(
-                SpeechErrorRecord.original_word,
-                SpeechErrorRecord.error_category,
-                func.count(SpeechErrorRecord.id).label("error_count"),
-            )
-            .filter_by(user_id=user_id)
-            .group_by(SpeechErrorRecord.original_word, SpeechErrorRecord.error_category)
-            .order_by(func.count(SpeechErrorRecord.id).desc())
-            .limit(
-                error_limit * 2
-            )  # ضاعف الحد لضمان وجود عدد كافٍ من الكلمات بعد الفلترة
-            .all()
-        )
+        # التحقق من وجود كلمات مخصصة في الطلب
+        custom_words = data.get("custom_words")
 
-        # تصفية الكلمات الصالحة فقط
-        filtered_errors = []
-        for error in speech_errors:
-            if is_valid_word(error.original_word):
-                filtered_errors.append(error)
+        if custom_words and isinstance(custom_words, list) and len(custom_words) > 0:
+            # استخدام الكلمات المخصصة التي تم اختيارها من قبل المستخدم
+            # سننشئ filtered_errors في شكل كائنات متوافقة مع الواجهة التي نستخدمها
+            filtered_errors = [
+                type(
+                    "obj",
+                    (object,),
+                    {
+                        "original_word": word["word"],
+                        "error_category": word["category"],
+                        "error_count": word["count"],
+                    },
+                )
+                for word in custom_words
+            ]
+            logger.info(
+                f"Using {len(filtered_errors)} custom words for exercises generation"
+            )
+        else:
+            # الحصول على أخطاء النطق للمستخدم
+            speech_errors = (
+                db.session.query(
+                    SpeechErrorRecord.original_word,
+                    SpeechErrorRecord.error_category,
+                    func.count(SpeechErrorRecord.id).label("error_count"),
+                )
+                .filter_by(user_id=user_id)
+                .group_by(
+                    SpeechErrorRecord.original_word, SpeechErrorRecord.error_category
+                )
+                .order_by(func.count(SpeechErrorRecord.id).desc())
+                .limit(
+                    error_limit * 2
+                )  # ضاعف الحد لضمان وجود عدد كافٍ من الكلمات بعد الفلترة
+                .all()
+            )
+
+            # تصفية الكلمات الصالحة فقط
+            filtered_errors = []
+            for error in speech_errors:
+                if is_valid_word(error.original_word):
+                    filtered_errors.append(error)
 
         if not filtered_errors:
             return (
@@ -349,67 +384,79 @@ def generate_exercises(user_id):
 
 
 @stories_bp.route("/save/<int:user_id>", methods=["POST"])
-def save_ai_story(user_id):
-    """
-    حفظ قصة مولدة بواسطة الذكاء الاصطناعي في قاعدة البيانات
-    """
+def save_story(user_id):
+    """حفظ قصة للمستخدم"""
     try:
+        data = request.json
+
+        # التحقق من وجود البيانات اللازمة
+        if not data or not data.get("story") or not data.get("story").get("text"):
+            return jsonify({"success": False, "message": "البيانات غير كاملة"}), 400
+
         # التحقق من وجود المستخدم
         user = User.query.get(user_id)
         if not user:
-            return (
-                jsonify({"success": False, "message": "لم يتم العثور على المستخدم"}),
-                404,
-            )
+            return jsonify({"success": False, "message": "المستخدم غير موجود"}), 404
 
-        # استلام بيانات القصة
-        data = request.json or {}
-
-        if not data.get("story"):
-            return jsonify({"success": False, "message": "بيانات القصة مفقودة"}), 400
-
+        # تحضير بيانات القصة
         story_data = data.get("story", {})
 
-        # استخراج البيانات اللازمة
-        title = story_data.get("theme", "قصة بدون عنوان")
-        content = story_data.get("text", "")
-        highlighted_content = story_data.get("highlighted_text", "")
-        theme = story_data.get("theme", "")
-        metadata = story_data.get("metadata", {})
-        difficulty = metadata.get("difficulty", "intermediate")
-        age_group = metadata.get("age_group", "children")
-        target_words = json.dumps(story_data.get("target_words", []))
+        # تحويل البيانات من JSON إلى نصوص لتخزينها في قاعدة البيانات
+        target_words_json = json.dumps(story_data.get("target_words", []))
+        vocabulary_json = json.dumps(data.get("vocabulary", []))
+        questions_json = json.dumps(data.get("questions", []))
 
-        vocabulary = json.dumps(data.get("vocabulary", []))
-        questions = json.dumps(data.get("questions", []))
-        moral = data.get("moral", "")
+        # تحديد مستوى الصعوبة
+        difficulty = story_data.get("metadata", {}).get("difficulty", "intermediate")
+        age_group = story_data.get("metadata", {}).get("age_group", "")
 
-        # إنشاء سجل القصة الجديد
-        ai_story = AIGeneratedStory(
+        # إنشاء كائن القصة
+        story = AIGeneratedStory(
             user_id=user_id,
-            title=title,
-            content=content,
-            highlighted_content=highlighted_content,
-            theme=theme,
+            title=story_data.get("theme", "قصة جديدة"),
+            content=story_data.get("text"),
+            highlighted_content=story_data.get(
+                "highlighted_text", story_data.get("text")
+            ),
+            theme=story_data.get("theme", "قصة جديدة"),
             difficulty=difficulty,
             age_group=age_group,
-            target_words=target_words,
-            vocabulary=vocabulary,
-            questions=questions,
-            moral=moral,
+            target_words=target_words_json,
+            vocabulary=vocabulary_json,
+            questions=questions_json,
+            moral=data.get("moral", ""),
+            images_generated=False,  # القصة لم تنشأ لها صور بعد
         )
 
-        db.session.add(ai_story)
+        # حفظ القصة في قاعدة البيانات
+        db.session.add(story)
         db.session.commit()
 
+        # بدء عملية إنشاء الصور في الخلفية (استدعاء غير متزامن)
+        # يمكن استخدام Celery أو طرق أخرى للعمليات الخلفية، لكن هنا سنستخدم طريقة بسيطة
+        try:
+            # استدعاء خدمة إنشاء الصور بشكل مباشر
+            ai_service = AIService()
+            # اختيار نمط الصور بناءً على الفئة العمرية والصعوبة
+            image_style = "cartoon"  # افتراضي للأطفال
+            if difficulty == "advanced":
+                image_style = "realistic"
+
+            # إنشاء الصور (هذا سيحدث بعد الاستجابة للطلب)
+            threading.Thread(
+                target=ai_service.generate_story_images, args=(story.id, image_style)
+            ).start()
+        except Exception as img_error:
+            logger.error(f"تعذر بدء عملية إنشاء الصور: {str(img_error)}")
+            # نواصل بدون إنشاء صور في حالة الخطأ
+
         return jsonify(
-            {"success": True, "message": "تم حفظ القصة بنجاح", "story_id": ai_story.id}
+            {"success": True, "message": "تم حفظ القصة بنجاح", "story_id": story.id}
         )
 
     except Exception as e:
-        logger.error(f"Error saving AI story: {str(e)}")
-        traceback.print_exc()
         db.session.rollback()
+        logger.error(f"خطأ في حفظ القصة: {str(e)}")
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -447,26 +494,23 @@ def get_ai_stories(user_id):
 
 @stories_bp.route("/ai-story/<int:story_id>", methods=["GET"])
 def get_ai_story(story_id):
-    """
-    الحصول على قصة محددة مولدة بواسطة الذكاء الاصطناعي
-    """
+    """الحصول على قصة واحدة مولدة بواسطة الذكاء الاصطناعي"""
     try:
         # البحث عن القصة
         story = AIGeneratedStory.query.get(story_id)
         if not story:
-            return (
-                jsonify({"success": False, "message": "لم يتم العثور على القصة"}),
-                404,
-            )
+            return jsonify({"success": False, "message": "القصة غير موجودة"}), 404
 
-        # تحويل القصة إلى تنسيق متوافق مع الواجهة الأمامية
-        story_data = story.to_story_response()
+        # تحويل القصة إلى الصيغة المطلوبة
+        response_data = story.to_story_response()
 
-        return jsonify(story_data)
+        # إضافة معلومات الصور تلقائيًا
+        response_data["images"] = [img.to_dict() for img in story.images]
+        response_data["images_generated"] = story.images_generated
 
+        return jsonify(response_data)
     except Exception as e:
         logger.error(f"Error retrieving AI story: {str(e)}")
-        traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
 
 
@@ -504,3 +548,124 @@ def get_story_history(user_id):
     """
     # تحويل المسار للمسار الجديد
     return get_ai_stories(user_id)
+
+
+@stories_bp.route("/generate-images/<int:story_id>", methods=["POST"])
+def generate_story_images(story_id):
+    """توليد صور للقصة"""
+    try:
+        data = request.json or {}
+        image_style = data.get("style", "cartoon")
+
+        # الاستعلام عن القصة للتأكد من وجودها
+        story = AIGeneratedStory.query.get(story_id)
+        if not story:
+            return jsonify({"success": False, "message": "القصة غير موجودة"}), 404
+
+        # استدعاء خدمة الذكاء الاصطناعي لتوليد الصور
+        ai_service = AIService()
+        result = ai_service.generate_story_images(story_id, image_style)
+
+        if result["success"]:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+
+    except Exception as e:
+        logger.error(f"Error generating images for story: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@stories_bp.route("/target-words/<int:user_id>", methods=["GET"])
+def get_target_words(user_id):
+    """
+    الحصول على الكلمات المستهدفة للمستخدم استنادًا إلى أخطاء النطق السابقة
+    """
+    try:
+        # التحقق من وجود المستخدم
+        user = User.query.get(user_id)
+        if not user:
+            return (
+                jsonify({"success": False, "message": "لم يتم العثور على المستخدم"}),
+                404,
+            )
+
+        # الحصول على أخطاء النطق للمستخدم
+        speech_errors = (
+            db.session.query(
+                SpeechErrorRecord.original_word,
+                SpeechErrorRecord.error_category,
+                func.count(SpeechErrorRecord.id).label("error_count"),
+            )
+            .filter_by(user_id=user_id)
+            .group_by(SpeechErrorRecord.original_word, SpeechErrorRecord.error_category)
+            .order_by(func.count(SpeechErrorRecord.id).desc())
+            .limit(30)  # زيادة الحد لضمان وجود عدد كافٍ من الكلمات بعد الفلترة
+            .all()
+        )
+
+        # تصفية الكلمات الصالحة فقط
+        filtered_errors = []
+        for error in speech_errors:
+            if is_valid_word(error.original_word):
+                filtered_errors.append(
+                    {
+                        "word": error.original_word,
+                        "category": error.error_category,
+                        "count": error.error_count,
+                    }
+                )
+
+        # إذا كان لدينا أقل من 5 كلمات، استخدم بعض الكلمات من أنشطة النطق السابقة
+        if len(filtered_errors) < 5:
+            recent_activities = (
+                SpeechActivity.query.filter_by(user_id=user_id)
+                .order_by(SpeechActivity.created_at.desc())
+                .limit(5)
+                .all()
+            )
+
+            sample_words = set()  # استخدام مجموعة لتجنب التكرار
+            for activity in recent_activities:
+                if activity.original_text:
+                    words = activity.original_text.split()
+                    for word in words:
+                        if (
+                            is_valid_word(word)
+                            and word not in [e["word"] for e in filtered_errors]
+                            and word not in sample_words
+                        ):
+                            sample_words.add(word)
+                            filtered_errors.append(
+                                {
+                                    "word": word,
+                                    "category": "general",
+                                    "count": 1,
+                                }
+                            )
+
+        # إذا لم نجد أي كلمات صالحة، استخدم كلمات افتراضية للتدريب
+        if not filtered_errors:
+            default_words = [
+                "مدرسة",
+                "كتاب",
+                "قلم",
+                "طالب",
+                "معلم",
+                "حديقة",
+                "منزل",
+                "سيارة",
+                "طريق",
+                "صديق",
+            ]
+            filtered_errors = [
+                {"word": word, "category": "default", "count": 1}
+                for word in default_words
+            ]
+
+        return jsonify({"success": True, "words": filtered_errors})
+
+    except Exception as e:
+        logger.error(f"Error fetching target words: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500

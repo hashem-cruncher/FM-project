@@ -50,7 +50,7 @@ class User(db.Model):
         return (
             SpeechErrorRecord.query.filter_by(user_id=self.id)
             .group_by(SpeechErrorRecord.original_word, SpeechErrorRecord.spoken_word)
-            .order_by(func.count(SpeechErrorRecord.id).desc())
+            .order_by(func.count().desc())
             .limit(limit)
             .all()
         )
@@ -108,8 +108,9 @@ class Lesson(db.Model):
         "LearningProgress", back_populates="lesson", lazy="dynamic"
     )
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_steps=False):
+        """Convert the model to a dictionary."""
+        result = {
             "id": self.id,
             "title": self.title,
             "description": self.description,
@@ -119,6 +120,12 @@ class Lesson(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+        if include_steps:
+            result["steps"] = self.get_steps()
+            result["total_steps"] = len(result["steps"])
+
+        return result
 
     def get_steps(self):
         """
@@ -142,24 +149,6 @@ class Lesson(db.Model):
             steps.append({"id": i, "content": "# " + section if i > 0 else section})
 
         return steps
-
-    def to_dict(self, include_steps=False):
-        result = {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "content": self.content,
-            "order": self.order,
-            "level_id": self.level_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-        if include_steps:
-            result["steps"] = self.get_steps()
-            result["total_steps"] = len(result["steps"])
-
-        return result
 
 
 class LearningProgress(db.Model):
@@ -350,10 +339,17 @@ class AIGeneratedStory(db.Model):
     vocabulary = db.Column(db.Text, nullable=False)  # Stored as JSON
     questions = db.Column(db.Text, nullable=False)  # Stored as JSON
     moral = db.Column(db.String(300), nullable=True)
+    images_generated = db.Column(
+        db.Boolean, default=False
+    )  # Flag to track if images are generated
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relationship to User
     user = db.relationship("User", backref=db.backref("ai_stories", lazy="dynamic"))
+    # Relationship to Images
+    images = db.relationship(
+        "StoryImage", backref="story", lazy=True, cascade="all, delete-orphan"
+    )
 
     def to_dict(self):
         """Convert the model to a dictionary"""
@@ -370,6 +366,8 @@ class AIGeneratedStory(db.Model):
             "vocabulary": json.loads(self.vocabulary),
             "questions": json.loads(self.questions),
             "moral": self.moral,
+            "images_generated": self.images_generated,
+            "images": [img.to_dict() for img in self.images],
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -402,5 +400,83 @@ class AIGeneratedStory(db.Model):
                 {"word": word, "category": "saved", "count": 1}
                 for word in json.loads(self.target_words)
             ],
+            "images": [img.to_dict() for img in self.images],
+            "images_generated": self.images_generated,
             "id": self.id,
         }
+
+
+class StoryImage(db.Model):
+    """نموذج لتخزين الصور المرتبطة بالقصص"""
+
+    __tablename__ = "story_images"
+
+    id = db.Column(db.Integer, primary_key=True)
+    story_id = db.Column(
+        db.Integer, db.ForeignKey("ai_generated_stories.id"), nullable=False
+    )
+    image_data = db.Column(db.Text, nullable=False)  # Base64 encoded image
+    scene_text = db.Column(db.Text, nullable=True)  # Text description of the scene
+    position = db.Column(
+        db.Integer, default=0
+    )  # Position in story (0: intro, 3: conclusion)
+    style = db.Column(
+        db.String(50), default="cartoon"
+    )  # Image style (cartoon, realistic, etc.)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        """Convert the model to a dictionary"""
+        return {
+            "id": self.id,
+            "story_id": self.story_id,
+            "image_data": self.image_data,
+            "scene_text": self.scene_text,
+            "position": self.position,
+            "style": self.style,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class CustomSentenceCategory(db.Model):
+    """نموذج لتخزين فئات الجمل المخصصة المنشأة بواسطة المستخدمين"""
+
+    __tablename__ = "custom_sentence_categories"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    category_id = db.Column(
+        db.String(100), nullable=False
+    )  # معرف الفئة حسب ما تم توليده
+    title = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.String(500), nullable=False)
+    icon = db.Column(db.String(50), nullable=False)
+    content = db.Column(db.Text, nullable=False)  # JSON string لتخزين الجمل
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # العلاقة مع المستخدم
+    user = db.relationship(
+        "User", backref=db.backref("custom_categories", lazy="dynamic")
+    )
+
+    def to_dict(self):
+        """تحويل النموذج إلى قاموس"""
+        try:
+            return {
+                "id": self.category_id,  # استخدام معرف الفئة المقدم من الواجهة الأمامية
+                "title": self.title,
+                "description": self.description,
+                "icon": self.icon,
+                "sentences": json.loads(self.content),
+                "created_at": self.created_at.isoformat() if self.created_at else None,
+            }
+        except Exception as e:
+            print(f"Error converting category to dict: {str(e)}")
+            return {
+                "id": self.category_id,
+                "title": self.title,
+                "description": self.description,
+                "icon": self.icon,
+                "sentences": [],
+                "created_at": self.created_at.isoformat() if self.created_at else None,
+            }

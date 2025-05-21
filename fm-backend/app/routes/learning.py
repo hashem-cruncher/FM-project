@@ -1,7 +1,16 @@
 from flask import Blueprint, jsonify, request
-from app.models.user import User, LearningLevel, LearningProgress, Lesson
+from app.models.user import (
+    User,
+    LearningLevel,
+    LearningProgress,
+    Lesson,
+    CustomSentenceCategory,
+)
 from app import db
 from datetime import datetime
+import logging
+import json
+from app.services.ai_service import AIService
 
 learning_bp = Blueprint("learning", __name__)
 
@@ -216,3 +225,169 @@ def get_lesson(lesson_id):
     except Exception as e:
         print(f"Error in get_lesson: {e}")
         return jsonify({"error": "حدث خطأ في الخادم"}), 500
+
+
+@learning_bp.route("/generate-section-exercises", methods=["POST"])
+def generate_section_exercises():
+    """توليد تمارين مخصصة لقسم محدد من أقسام تعلم الجمل"""
+    try:
+        data = request.json
+
+        if not data:
+            return jsonify({"success": False, "message": "البيانات مفقودة"}), 400
+
+        section_title = data.get("section_title")
+        section_sentences = data.get("sentences", [])
+
+        if not section_title or not section_sentences or len(section_sentences) < 3:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": "يرجى توفير عنوان القسم وعلى الأقل 3 جمل",
+                    }
+                ),
+                400,
+            )
+
+        # إنشاء خدمة الذكاء الاصطناعي
+        ai_service = AIService()
+
+        # توليد التمارين باستخدام النموذج اللغوي
+        result = ai_service.generate_section_exercises(
+            section_title=section_title, sentences=section_sentences
+        )
+
+        if not result.get("success"):
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": "فشل في توليد التمارين",
+                        "error": result.get("error"),
+                    }
+                ),
+                500,
+            )
+
+        return jsonify(result)
+
+    except Exception as e:
+        logging.error(f"خطأ في توليد تمارين القسم: {str(e)}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@learning_bp.route("/generate-sentence-category", methods=["POST"])
+def generate_sentence_category():
+    """إنشاء فئة جديدة من الجمل باستخدام نماذج اللغة الكبيرة (LLM)"""
+    try:
+        data = request.json
+
+        if not data:
+            return jsonify({"success": False, "message": "البيانات مفقودة"}), 400
+
+        # استخراج البيانات من الطلب
+        category_name = data.get("category_name")  # اختياري
+        difficulty_level = data.get("difficulty_level", "beginner")
+        num_sentences = data.get("num_sentences", 5)
+        user_id = data.get("user_id")
+
+        if not user_id:
+            return (
+                jsonify({"success": False, "message": "يجب تحديد هوية المستخدم"}),
+                400,
+            )
+
+        # التحقق من صحة البيانات
+        if num_sentences < 3 or num_sentences > 10:
+            return (
+                jsonify(
+                    {"success": False, "message": "عدد الجمل يجب أن يكون بين 3 و 10"}
+                ),
+                400,
+            )
+
+        # إنشاء خدمة الذكاء الاصطناعي
+        ai_service = AIService()
+
+        # توليد فئة الجمل باستخدام النموذج اللغوي
+        result = ai_service.generate_sentence_category(
+            category_name=category_name,
+            difficulty_level=difficulty_level,
+            num_sentences=num_sentences,
+        )
+
+        if not result["success"]:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "message": result.get("error", "حدث خطأ أثناء إنشاء فئة الجمل"),
+                    }
+                ),
+                500,
+            )
+
+        # حفظ الفئة في قاعدة البيانات
+        category_data = result["category"]
+
+        # فحص إذا كانت الفئة موجودة مسبقًا
+        existing_category = CustomSentenceCategory.query.filter_by(
+            user_id=user_id, category_id=category_data["id"]
+        ).first()
+
+        if existing_category:
+            # تحديث الفئة الموجودة
+            existing_category.title = category_data["title"]
+            existing_category.description = category_data["description"]
+            existing_category.icon = category_data["icon"]
+            existing_category.content = json.dumps(category_data["sentences"])
+        else:
+            # إنشاء فئة جديدة
+            new_category = CustomSentenceCategory(
+                user_id=user_id,
+                category_id=category_data["id"],
+                title=category_data["title"],
+                description=category_data["description"],
+                icon=category_data["icon"],
+                content=json.dumps(category_data["sentences"]),
+            )
+            db.session.add(new_category)
+
+        db.session.commit()
+
+        # إعادة البيانات للمستخدم
+        return jsonify(result), 200
+
+    except Exception as e:
+        print(f"Error in generate_sentence_category: {str(e)}")
+        db.session.rollback()
+        return (
+            jsonify({"success": False, "message": f"حدث خطأ في الخادم: {str(e)}"}),
+            500,
+        )
+
+
+@learning_bp.route("/custom-sentence-categories/<int:user_id>", methods=["GET"])
+def get_custom_sentence_categories(user_id):
+    """الحصول على فئات الجمل المخصصة للمستخدم"""
+    try:
+        # التحقق من وجود المستخدم
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"success": False, "message": "المستخدم غير موجود"}), 404
+
+        # استرجاع فئات الجمل المخصصة
+        categories = CustomSentenceCategory.query.filter_by(user_id=user_id).all()
+
+        # تحويل الفئات إلى قائمة من القواميس
+        categories_list = [category.to_dict() for category in categories]
+
+        return jsonify({"success": True, "categories": categories_list}), 200
+
+    except Exception as e:
+        print(f"Error in get_custom_sentence_categories: {str(e)}")
+        return (
+            jsonify({"success": False, "message": f"حدث خطأ في الخادم: {str(e)}"}),
+            500,
+        )

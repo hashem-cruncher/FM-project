@@ -10,6 +10,7 @@ from .routes.learning import learning_bp
 from .routes.progress import progress_bp
 from .routes.speech import speech_bp
 from .routes.stories import stories_bp
+from .routes.images import images_bp
 
 
 def create_app():
@@ -156,6 +157,7 @@ def create_app():
     app.register_blueprint(progress_bp, url_prefix="/api/progress")
     app.register_blueprint(speech_bp, url_prefix="/api/speech")
     app.register_blueprint(stories_bp, url_prefix="/api/stories")
+    app.register_blueprint(images_bp, url_prefix="/api/images")
 
     @app.route("/api/health")
     def health_check():
